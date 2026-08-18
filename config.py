@@ -9,3 +9,6 @@ EMULATOR_PORT = 35000
 
 # Налаштування COM-порту для реального ELM327 (наприклад: "COM3" або "/dev/ttyUSB0")
 REAL_OBD_PORT = os.getenv("OBD_PORT", "COM3")
+
+# Вигляд карток за замовчуванням ("Detailed" або "Compact")
+CARD_STYLE = "Detailed"
