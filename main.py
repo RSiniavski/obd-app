@@ -6,7 +6,6 @@ import config
 from app.connection import OBDConnectionManager
 from app.reader import TelemetryReader
 
-# Ініціалізація підтримки кольорів
 colorama.just_fix_windows_console()
 
 RED = "\033[91m"
@@ -16,46 +15,36 @@ CYAN = "\033[96m"
 RESET = "\033[0m"
 
 
-# --- НАДІЙНЕ КРОСПЛАТФОРМЕННЕ ЗЧИТУВАННЯ КЛАВІШ (Версія 2) ---
+# Контекстний менеджер для Linux, який переводить термінал
+# у режим зчитування клавіш НА ВЕСЬ ЧАС РОБОТИ ПРОГРАМИ
+class NonBlockingInput:
+    def __enter__(self):
+        if os.name != 'nt':
+            import termios
+            import tty
+            self.fd = sys.stdin.fileno()
+            self.old_settings = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)  # Режим cbreak: зчитує посимвольно, але підтримує Ctrl+C
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if os.name != 'nt':
+            import termios
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+
 
 def get_key_pressed():
     if os.name == 'nt':
-        # Для Windows (без змін)
         import msvcrt
         if msvcrt.kbhit():
             return msvcrt.getch().decode('utf-8', errors='ignore').lower()
     else:
-        # Для Linux / WalnutPi - НИЗЬКОРІВНЕВИЙ ПІДХІД
-        import sys
         import select
-        import termios
-        import tty
-
-        # Зберігаємо старі налаштування терміналу
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-
-        try:
-            # Переводимо термінал у сирий режим
-            tty.setraw(fd)
-
-            # Перевіряємо, чи є дані для зчитування в stdin (неблокуюче)
-            if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
-                # Зчитуємо один символ
-                char = sys.stdin.read(1)
-                return char.lower()
-        except Exception as e:
-            # Можна розкоментувати для відлагодження:
-            # print(f"Error reading key: {e}", file=sys.stderr)
-            pass
-        finally:
-            # Обов'язково відновлюємо старі налаштування!
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
+        # Перевіряємо, чи є вхідний символ без затримок
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1).lower()
     return None
 
-
-# --- ФОРМАТУВАННЯ ТА ВІДОБРАЖЕННЯ ДАШБОРДУ ---
 
 def format_coolant(val):
     if val is None: return f"{YELLOW}N/A{RESET}"
@@ -119,30 +108,32 @@ def main():
     dtcs = reader.read_dtc()
     status_msg = ""
 
-    try:
-        while True:
-            metrics = reader.read_metrics()
-            print_dashboard(metrics, dtcs, status_msg)
+    # Огортаємо головний цикл у контекстний менеджер
+    with NonBlockingInput():
+        try:
+            while True:
+                metrics = reader.read_metrics()
+                print_dashboard(metrics, dtcs, status_msg)
 
-            start_time = time.time()
-            while time.time() - start_time < 0.3:
-                key = get_key_pressed()
-                if key == 'c':
-                    status_msg = "Очищення помилок..."
-                    print_dashboard(metrics, dtcs, status_msg)
-                    if reader.clear_dtc():
-                        dtcs = []
-                        status_msg = "Помилки успішно скинуті!"
-                    else:
-                        status_msg = "Помилка при скиданні DTC."
-                elif key == 'r':
-                    status_msg = "Зчитування помилок..."
-                    dtcs = reader.read_dtc()
-                    status_msg = "DTC оновлено."
-                time.sleep(0.01)
+                start_time = time.time()
+                while time.time() - start_time < 0.5:
+                    key = get_key_pressed()
+                    if key == 'c':
+                        status_msg = "Очищення помилок..."
+                        print_dashboard(metrics, dtcs, status_msg)
+                        if reader.clear_dtc():
+                            dtcs = []
+                            status_msg = "Помилки успішно скинуті!"
+                        else:
+                            status_msg = "Помилка при скиданні DTC."
+                    elif key == 'r':
+                        status_msg = "Зчитування помилок..."
+                        dtcs = reader.read_dtc()
+                        status_msg = "DTC оновлено."
+                    time.sleep(0.02)
 
-    except KeyboardInterrupt:
-        print("\n[App] Роботу завершено користувачем.")
+        except KeyboardInterrupt:
+            print("\n[App] Роботу завершено користувачем.")
 
 
 if __name__ == "__main__":
