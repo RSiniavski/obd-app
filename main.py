@@ -6,6 +6,7 @@ import config
 from app.connection import OBDConnectionManager
 from app.reader import TelemetryReader
 
+# Ініціалізація підтримки кольорів
 colorama.just_fix_windows_console()
 
 RED = "\033[91m"
@@ -15,28 +16,42 @@ CYAN = "\033[96m"
 RESET = "\033[0m"
 
 
-# Кросплатформенне зчитування клавіш без блокування
+# --- НАДІЙНЕ КРОСПЛАТФОРМЕННЕ ЗЧИТУВАННЯ КЛАВІШ ---
+
 def get_key_pressed():
     if os.name == 'nt':
+        # Для Windows
         import msvcrt
         if msvcrt.kbhit():
             return msvcrt.getch().decode('utf-8', errors='ignore').lower()
     else:
+        # Для Linux / WalnutPi
         import select
         import tty
         import termios
-        dr, _, _ = select.select([sys.stdin], [], [], 0)
-        if dr:
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            try:
-                tty.setraw(sys.stdin.fileno())
-                ch = sys.stdin.read(1)
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return ch.lower()
+        import fcntl
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            # Переводимо stdin в неблокуючий режим
+            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+            ch = sys.stdin.read(1)
+            if ch:
+                return ch.lower()
+        except (EOFError, IOError):
+            pass
+        finally:
+            # Відновлюємо налаштування терміналу
+            fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return None
 
+
+# --- ФОРМАТУВАННЯ ТА ВІДОБРАЖЕННЯ ДАШБОРДУ ---
 
 def format_coolant(val):
     if val is None: return f"{YELLOW}N/A{RESET}"
@@ -106,7 +121,7 @@ def main():
             print_dashboard(metrics, dtcs, status_msg)
 
             start_time = time.time()
-            while time.time() - start_time < 0.5:
+            while time.time() - start_time < 0.3:
                 key = get_key_pressed()
                 if key == 'c':
                     status_msg = "Очищення помилок..."
@@ -120,7 +135,7 @@ def main():
                     status_msg = "Зчитування помилок..."
                     dtcs = reader.read_dtc()
                     status_msg = "DTC оновлено."
-                time.sleep(0.05)
+                time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\n[App] Роботу завершено користувачем.")
