@@ -1,11 +1,11 @@
 import os
 
-# Режим роботи: True — робота з локальним симулятором, False — з реальним авто
-IS_EMULATOR = True
+# Перемикач режиму: True — емулятор, False — реальне авто
+IS_EMULATOR = False
 
-# Налаштування мережі для емулятора
-EMULATOR_HOST = "127.0.0.1"
-EMULATOR_PORT = 35000
+# Порт для реального Bluetooth OBD2 адаптера
+# Для WalnutPi (Linux) це /dev/rfcomm0, для Windows (для тестів вдома) — COM3/COM4
+REAL_OBD_PORT = '/dev/rfcomm0' if os.name != 'nt' else 'COM3'
 
-# Налаштування COM-порту для реального ELM327 (наприклад: "COM3" або "/dev/ttyUSB0")
-REAL_OBD_PORT = os.getenv("OBD_PORT", "COM3")
+# Швидкість підключення для ELM327
+OBD_BAUDRATE = 38400
