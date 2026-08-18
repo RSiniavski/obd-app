@@ -1,13 +1,11 @@
 import time
 import os
 import sys
-import select
 import colorama
 import config
 from app.connection import OBDConnectionManager
 from app.reader import TelemetryReader
 
-# Ініціалізація підтримки кольорів у Windows/Linux
 colorama.just_fix_windows_console()
 
 RED = "\033[91m"
@@ -15,6 +13,29 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
 RESET = "\033[0m"
+
+
+# Кросплатформенне зчитування клавіш без блокування
+def get_key_pressed():
+    if os.name == 'nt':
+        import msvcrt
+        if msvcrt.kbhit():
+            return msvcrt.getch().decode('utf-8', errors='ignore').lower()
+    else:
+        import select
+        import tty
+        import termios
+        dr, _, _ = select.select([sys.stdin], [], [], 0)
+        if dr:
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(sys.stdin.fileno())
+                ch = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            return ch.lower()
+    return None
 
 
 def format_coolant(val):
@@ -79,31 +100,26 @@ def main():
     dtcs = reader.read_dtc()
     status_msg = ""
 
-    # Налаштування неблокуючого вводу з клавіатури для Windows
-    import msvcrt
-
     try:
         while True:
             metrics = reader.read_metrics()
             print_dashboard(metrics, dtcs, status_msg)
 
-            # Перевіряємо натискання клавіш без затримки
             start_time = time.time()
             while time.time() - start_time < 0.5:
-                if msvcrt.kbhit():
-                    key = msvcrt.getch().decode('utf-8').lower()
-                    if key == 'c':
-                        status_msg = "Очищення помилок..."
-                        print_dashboard(metrics, dtcs, status_msg)
-                        if reader.clear_dtc():
-                            dtcs = []
-                            status_msg = "Помилки успішно скинуті!"
-                        else:
-                            status_msg = "Помилка при скиданні DTC."
-                    elif key == 'r':
-                        status_msg = "Зчитування помилок..."
-                        dtcs = reader.read_dtc()
-                        status_msg = "DTC оновлено."
+                key = get_key_pressed()
+                if key == 'c':
+                    status_msg = "Очищення помилок..."
+                    print_dashboard(metrics, dtcs, status_msg)
+                    if reader.clear_dtc():
+                        dtcs = []
+                        status_msg = "Помилки успішно скинуті!"
+                    else:
+                        status_msg = "Помилка при скиданні DTC."
+                elif key == 'r':
+                    status_msg = "Зчитування помилок..."
+                    dtcs = reader.read_dtc()
+                    status_msg = "DTC оновлено."
                 time.sleep(0.05)
 
     except KeyboardInterrupt:
