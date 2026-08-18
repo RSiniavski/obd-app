@@ -16,38 +16,42 @@ CYAN = "\033[96m"
 RESET = "\033[0m"
 
 
-# --- НАДІЙНЕ КРОСПЛАТФОРМЕННЕ ЗЧИТУВАННЯ КЛАВІШ ---
+# --- НАДІЙНЕ КРОСПЛАТФОРМЕННЕ ЗЧИТУВАННЯ КЛАВІШ (Версія 2) ---
 
 def get_key_pressed():
     if os.name == 'nt':
-        # Для Windows
+        # Для Windows (без змін)
         import msvcrt
         if msvcrt.kbhit():
             return msvcrt.getch().decode('utf-8', errors='ignore').lower()
     else:
-        # Для Linux / WalnutPi
+        # Для Linux / WalnutPi - НИЗЬКОРІВНЕВИЙ ПІДХІД
+        import sys
         import select
-        import tty
         import termios
-        import fcntl
+        import tty
 
+        # Зберігаємо старі налаштування терміналу
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            # Переводимо stdin в неблокуючий режим
-            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
-            ch = sys.stdin.read(1)
-            if ch:
-                return ch.lower()
-        except (EOFError, IOError):
+        try:
+            # Переводимо термінал у сирий режим
+            tty.setraw(fd)
+
+            # Перевіряємо, чи є дані для зчитування в stdin (неблокуюче)
+            if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+                # Зчитуємо один символ
+                char = sys.stdin.read(1)
+                return char.lower()
+        except Exception as e:
+            # Можна розкоментувати для відлагодження:
+            # print(f"Error reading key: {e}", file=sys.stderr)
             pass
         finally:
-            # Відновлюємо налаштування терміналу
-            fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+            # Обов'язково відновлюємо старі налаштування!
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
     return None
 
 
