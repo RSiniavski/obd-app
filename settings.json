@@ -1,0 +1,19 @@
+{
+    "cards": {
+        "boost": {
+            "size_hint_x": 0.475
+        },
+        "speed": {
+            "size_hint_x": 0.31
+        },
+        "rpm": {
+            "size_hint_x": 0.31
+        },
+        "coolant": {
+            "size_hint_x": 0.31
+        },
+        "voltage": {
+            "size_hint_x": 0.475
+        }
+    }
+}

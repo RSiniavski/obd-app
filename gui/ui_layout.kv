@@ -1,0 +1,210 @@
+<MetricCard>:
+    style: "elevated"
+    padding: ["8dp", "8dp", "8dp", "6dp"]
+    spacing: "4dp"
+    orientation: "vertical"
+    size_hint_x: root.card_size_hint_x
+    size_hint_y: None
+    height: root.card_height
+
+    # Верхня частина картки (Заголовок + Значення + Графік/Габарит)
+    MDBoxLayout:
+        orientation: "vertical"
+        spacing: "2dp"
+
+        MDLabel:
+            id: title_lbl
+            text: root.title
+            font_style: "Label"
+            role: "medium"
+            halign: "center"
+            size_hint_y: None
+            height: "18dp"
+
+        MDLabel:
+            id: value_lbl
+            text: "0 " + root.unit
+            font_style: "Title"
+            role: "medium"
+            halign: "center"
+            size_hint_y: None
+            height: "30dp"
+
+        MDBoxLayout:
+            id: visual_container
+            orientation: "vertical"
+            size_hint_y: None
+            height: "0dp"
+            opacity: 0
+
+            MDLinearProgressIndicator:
+                id: progress_bar
+                value: 0
+                size_hint_y: None
+                height: "8dp"
+                opacity: 0
+
+            MiniChartWidget:
+                id: chart_widget
+                size_hint_y: None
+                height: "0dp"
+                opacity: 0
+
+            MiniGaugeWidget:
+                id: gauge_widget
+                size_hint_y: None
+                height: "0dp"
+                opacity: 0
+
+    # Нижній блок керування розміром та перемикачем ширини (1/2/3 в рядок)
+    RelativeLayout:
+        size_hint_y: None
+        height: "24dp"
+
+        MDIconButton:
+            icon: "aspect-ratio"
+            style: "standard"
+            size_hint: None, None
+            size: "24dp", "24dp"
+            pos: 0, 0
+            on_release: root.cycle_width_span()
+
+        MDIconButton:
+            id: resize_handle
+            icon: "resize-bottom-right"
+            style: "standard"
+            size_hint: None, None
+            size: "24dp", "24dp"
+            pos: self.parent.width - self.width, 0
+
+
+<DashboardScreen>:
+    MDScrollView:
+        id: main_scroll
+        do_scroll_x: False
+
+        # Відкоригований padding та spacing для ідеально рівних відступів
+        MDStackLayout:
+            id: dashboard_box
+            orientation: 'lr-tb'
+            padding: ["12dp", "12dp", "0dp", "12dp"]
+            spacing: "12dp"
+            size_hint_y: None
+            height: self.minimum_height
+
+            MetricCard:
+                id: card_rpm
+                key: "rpm"
+                title: "Оберти (RPM)"
+                unit: "RPM"
+
+            MetricCard:
+                id: card_speed
+                key: "speed"
+                title: "Швидкість"
+                unit: "km/h"
+
+            MetricCard:
+                id: card_coolant
+                key: "coolant"
+                title: "Температура"
+                unit: "°C"
+
+            MetricCard:
+                id: card_boost
+                key: "boost"
+                title: "Наддув (Boost)"
+                unit: "bar"
+
+            MetricCard:
+                id: card_voltage
+                key: "voltage"
+                title: "Напруга"
+                unit: "V"
+
+
+<DTCScreen>:
+    MDBoxLayout:
+        orientation: 'vertical'
+        padding: "20dp"
+        spacing: "15dp"
+
+        MDLabel:
+            text: "Діагностика (DTC)"
+            font_style: "Headline"
+            role: "small"
+            halign: "center"
+            size_hint_y: None
+            height: "40dp"
+
+        MDLabel:
+            id: dtc_label
+            text: "Натисніть 'Зчитати помилки'"
+            halign: "center"
+            font_style: "Body"
+            role: "large"
+            size_hint_y: None
+            height: "80dp"
+
+        MDButton:
+            on_release: root.read_dtc()
+            size_hint_x: 0.8
+            size_hint_y: None
+            height: "48dp"
+            pos_hint: {"center_x": 0.5}
+            MDButtonText:
+                text: "Зчитати помилки"
+
+        MDButton:
+            on_release: root.clear_dtc()
+            size_hint_x: 0.8
+            size_hint_y: None
+            height: "48dp"
+            pos_hint: {"center_x": 0.5}
+            MDButtonText:
+                text: "Скинути помилки (Clear DTC)"
+
+        MDBoxLayout:
+
+
+<SettingsScreen>:
+    MDBoxLayout:
+        orientation: 'vertical'
+        padding: "20dp"
+        spacing: "15dp"
+
+        MDLabel:
+            text: "Налаштування"
+            font_style: "Headline"
+            role: "small"
+            halign: "center"
+            size_hint_y: None
+            height: "40dp"
+
+        MDBoxLayout:
+            orientation: 'horizontal'
+            spacing: "10dp"
+            size_hint_y: None
+            height: "40dp"
+
+            MDLabel:
+                text: "Емулятор:"
+                font_style: "Body"
+                role: "large"
+
+            MDButton:
+                on_release: root.toggle_emulator()
+                size_hint_y: None
+                height: "40dp"
+                MDButtonText:
+                    id: sim_btn_text
+                    text: "УВІМК" if root.is_emulator else "ВИМК"
+
+        MDBoxLayout:
+            id: metrics_settings_box
+            orientation: 'vertical'
+            spacing: "15dp"
+            size_hint_y: None
+            height: "300dp"
+
+        MDBoxLayout:

@@ -1,177 +1,356 @@
+import os
+import json
+from kivy.lang import Builder
+from kivy.clock import Clock
+from kivy.properties import BooleanProperty, StringProperty, NumericProperty
+from kivy.graphics import Color, Line
+
 from kivymd.app import MDApp
-from kivymd.uix.label import MDLabel
-from kivymd.uix.button import MDButton, MDButtonText
-from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
-from kivymd.uix.selectioncontrol import MDSwitch
+from kivymd.uix.label import MDLabel
+from kivymd.uix.button import MDButton, MDButtonText, MDIconButton
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
 from kivymd.uix.navigationbar import MDNavigationBar, MDNavigationItem, MDNavigationItemIcon, MDNavigationItemLabel
-from kivy.clock import Clock
+from kivymd.uix.boxlayout import MDBoxLayout
 
 import config
 from app.connection import OBDConnectionManager
 from app.reader import TelemetryReader
 
+SETTINGS_FILE = "settings.json"
+
+
+def load_saved_card_configs():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("cards", {})
+        except Exception:
+            pass
+    return {}
+
+
+def save_card_configs():
+    data = {"cards": getattr(config, "CARD_CONFIGS", {})}
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
+
+class MiniChartWidget(MDBoxLayout):
+    def __init__(self, max_points=30, **kwargs):
+        super().__init__(**kwargs)
+        self.max_points = max_points
+        self.points_history = []
+        self.bind(size=self.redraw, pos=self.redraw)
+
+    def add_value(self, val, min_val, max_val):
+        norm_val = max(0.0, min(1.0, (val - min_val) / (max_val - min_val if max_val != min_val else 1)))
+        self.points_history.append(norm_val)
+        if len(self.points_history) > self.max_points:
+            self.points_history.pop(0)
+        self.redraw()
+
+    def redraw(self, *args):
+        self.canvas.after.clear()
+        if len(self.points_history) < 2 or self.height <= 0:
+            return
+
+        with self.canvas.after:
+            Color(0.2, 0.6, 1.0, 1)
+            line_points = []
+            width_step = self.width / (self.max_points - 1) if self.max_points > 1 else self.width
+
+            for i, norm_val in enumerate(self.points_history):
+                x = self.x + i * width_step
+                y = self.y + (norm_val * (self.height - 10)) + 5
+                line_points.extend([x, y])
+
+            Line(points=line_points, width=2)
+
+
+class MiniGaugeWidget(MDBoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.norm_value = 0.0
+        self.bind(size=self.redraw, pos=self.redraw)
+
+    def set_norm_value(self, norm_val):
+        self.norm_value = max(0.0, min(1.0, norm_val))
+        self.redraw()
+
+    def redraw(self, *args):
+        self.canvas.after.clear()
+        d = min(self.width, self.height) - 4
+        if d <= 0:
+            return
+
+        x = self.x + (self.width - d) / 2
+        y = self.y + (self.height - d) / 2
+
+        with self.canvas.after:
+            Color(0.3, 0.3, 0.3, 1)
+            Line(ellipse=(x, y, d, d, -120, 120), width=3)
+
+            angle = -120 + (self.norm_value * 240)
+            Color(0.2, 0.7, 1.0, 1)
+            Line(ellipse=(x, y, d, d, -120, angle), width=4)
+
+
+KV_FILE = os.path.join(os.path.dirname(__file__), "ui_layout.kv")
+Builder.load_file(KV_FILE)
+
 
 class MetricCard(MDCard):
-    """Компонент картки для виводу метрики"""
+    key = StringProperty("")
+    title = StringProperty("")
+    unit = StringProperty("")
+    card_height = NumericProperty(130)
+    card_size_hint_x = NumericProperty(0.475)
 
-    def __init__(self, title, unit="", **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.title = title
-        self.unit = unit
-        self.padding = 15
-        self.spacing = 5
-        self.style = "elevated"
+        self._resizing = False
+        self._initial_mouse_y = 0
+        self._initial_card_height = 130
+        Clock.schedule_once(self._init_card, 0)
 
-        self.layout = MDBoxLayout(orientation="vertical")
-        self.title_label = MDLabel(text=self.title, font_style="Label", role="medium", halign="center")
-        self.value_label = MDLabel(text=f"0 {self.unit}".strip(), font_style="Headline", role="medium", halign="center")
+    def _init_card(self, dt):
+        if not hasattr(config, "CARD_CONFIGS"):
+            config.CARD_CONFIGS = load_saved_card_configs()
 
-        self.layout.add_widget(self.title_label)
-        self.layout.add_widget(self.value_label)
-        self.add_widget(self.layout)
+        cfg = config.CARD_CONFIGS.get(self.key, {})
+        if "height" in cfg:
+            self.card_height = cfg["height"]
+        if "size_hint_x" in cfg:
+            self.card_size_hint_x = cfg["size_hint_x"]
 
-    def update_value(self, val, style="Detailed"):
-        formatted_val = f"{val} {self.unit}".strip()
+        self.apply_style_layout()
 
-        if style == "Compact":
-            # Компактний стиль: назва і значення в один рядок
-            self.title_label.text = ""
-            self.value_label.font_style = "Title"
-            self.value_label.role = "medium"
-            self.value_label.text = f"{self.title}: {formatted_val}"
-        else:
-            # Детальний стиль: велика цифра, зверху назва
-            self.title_label.text = self.title
-            self.value_label.font_style = "Headline"
-            self.value_label.role = "medium"
-            self.value_label.text = formatted_val
+    def cycle_width_span(self):
+        # Точні розраховані значення для симетричного перемикання
+        spans = [1.0, 0.475, 0.31]
+        try:
+            curr_idx = spans.index(round(self.card_size_hint_x, 3))
+            next_span = spans[(curr_idx + 1) % len(spans)]
+        except ValueError:
+            next_span = 0.475
+
+        self.card_size_hint_x = next_span
+
+        if self.key not in config.CARD_CONFIGS:
+            config.CARD_CONFIGS[self.key] = {}
+        config.CARD_CONFIGS[self.key]["size_hint_x"] = next_span
+        save_card_configs()
+
+    def on_touch_down(self, touch):
+        if self.ids.resize_handle.collide_point(*touch.pos):
+            self._resizing = True
+            self._initial_mouse_y = touch.y
+            self._initial_card_height = self.card_height
+            touch.grab(self)
+            return True
+        return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self and self._resizing:
+            delta_y = self._initial_mouse_y - touch.y
+            new_height = max(100, min(500, self._initial_card_height + delta_y))
+
+            self.card_height = new_height
+            if self.key not in config.CARD_CONFIGS:
+                config.CARD_CONFIGS[self.key] = {}
+            config.CARD_CONFIGS[self.key]["height"] = new_height
+            self.apply_style_layout()
+            return True
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            self._resizing = False
+            save_card_configs()
+            return True
+        return super().on_touch_up(touch)
+
+    def apply_style_layout(self):
+        mode = config.METRIC_STYLES.get(self.key, "text")
+
+        if mode == "text":
+            self.ids.visual_container.height = "0dp"
+            self.ids.visual_container.opacity = 0
+            self.ids.progress_bar.height = "0dp"
+            self.ids.progress_bar.opacity = 0
+            self.ids.chart_widget.height = "0dp"
+            self.ids.chart_widget.opacity = 0
+            self.ids.gauge_widget.height = "0dp"
+            self.ids.gauge_widget.opacity = 0
+
+        elif mode == "bar":
+            self.ids.visual_container.height = "12dp"
+            self.ids.visual_container.opacity = 1
+            self.ids.progress_bar.height = "10dp"
+            self.ids.progress_bar.opacity = 1
+            self.ids.chart_widget.height = "0dp"
+            self.ids.chart_widget.opacity = 0
+            self.ids.gauge_widget.height = "0dp"
+            self.ids.gauge_widget.opacity = 0
+
+        elif mode == "chart":
+            chart_h = max(20, self.card_height - 85)
+            self.ids.visual_container.height = f"{chart_h}dp"
+            self.ids.visual_container.opacity = 1
+            self.ids.progress_bar.height = "0dp"
+            self.ids.progress_bar.opacity = 0
+            self.ids.chart_widget.height = f"{chart_h}dp"
+            self.ids.chart_widget.opacity = 1
+            self.ids.gauge_widget.height = "0dp"
+            self.ids.gauge_widget.opacity = 0
+
+        elif mode == "gauge":
+            gauge_h = max(20, self.card_height - 85)
+            self.ids.visual_container.height = f"{gauge_h}dp"
+            self.ids.visual_container.opacity = 1
+            self.ids.progress_bar.height = "0dp"
+            self.ids.progress_bar.opacity = 0
+            self.ids.chart_widget.height = "0dp"
+            self.ids.chart_widget.opacity = 0
+            self.ids.gauge_widget.height = f"{gauge_h}dp"
+            self.ids.gauge_widget.opacity = 1
+
+    def update_value(self, val):
+        unit_str = f" {self.unit}".strip()
+        self.ids.value_lbl.text = f"{val}{unit_str}"
+
+        mode = config.METRIC_STYLES.get(self.key, "text")
+        min_val, max_val = config.METRIC_LIMITS.get(self.key, (0, 100))
+        norm = (val - min_val) / (max_val - min_val if max_val != min_val else 1)
+
+        if mode == "bar":
+            self.ids.progress_bar.value = max(0, min(100, int(norm * 100)))
+        elif mode == "chart":
+            self.ids.chart_widget.add_value(val, min_val, max_val)
+        elif mode == "gauge":
+            self.ids.gauge_widget.set_norm_value(norm)
 
 
 class DashboardScreen(MDScreen):
-    """Головний екран з показниками у вигляді карток"""
-
-    def __init__(self, reader, **kwargs):
-        super().__init__(**kwargs)
-        self.reader = reader
-
-        self.main_layout = MDBoxLayout(orientation='vertical', padding=15, spacing=10)
-
-        # Створюємо картки для показників
-        self.card_rpm = MetricCard(title="Оберти (RPM)", unit="")
-        self.card_speed = MetricCard(title="Швидкість", unit="km/h")
-        self.card_temp = MetricCard(title="Температура", unit="°C")
-        self.card_boost = MetricCard(title="Наддув (Boost)", unit="bar")
-        self.card_voltage = MetricCard(title="Напруга", unit="V")
-
-        self.main_layout.add_widget(self.card_rpm)
-        self.main_layout.add_widget(self.card_speed)
-        self.main_layout.add_widget(self.card_temp)
-        self.main_layout.add_widget(self.card_boost)
-        self.main_layout.add_widget(self.card_voltage)
-
-        self.add_widget(self.main_layout)
-
-    def update_metrics(self, card_style):
-        data = self.reader.read_metrics()
+    def update_metrics(self, reader):
+        data = reader.read_metrics()
         if data:
-            self.card_rpm.update_value(data.get('rpm') or 0, card_style)
-            self.card_speed.update_value(data.get('speed') or 0, card_style)
-            self.card_temp.update_value(data.get('coolant') or 0, card_style)
-            self.card_boost.update_value(data.get('boost') or 0.0, card_style)
-            self.card_voltage.update_value(data.get('voltage') or 0.0, card_style)
+            if 'card_rpm' in self.ids:
+                self.ids.card_rpm.update_value(data.get('rpm') or 0)
+            if 'card_speed' in self.ids:
+                self.ids.card_speed.update_value(data.get('speed') or 0)
+            if 'card_coolant' in self.ids:
+                self.ids.card_coolant.update_value(data.get('coolant') or 0)
+            if 'card_boost' in self.ids:
+                self.ids.card_boost.update_value(data.get('boost') or 0.0)
+            if 'card_voltage' in self.ids:
+                self.ids.card_voltage.update_value(data.get('voltage') or 0.0)
 
 
 class DTCScreen(MDScreen):
-    """Екран діагностики"""
-
-    def __init__(self, reader, **kwargs):
-        super().__init__(**kwargs)
-        self.reader = reader
-
-        layout = MDBoxLayout(orientation='vertical', padding=20, spacing=15)
-
-        self.dtc_label = MDLabel(text="Натисніть 'Зчитати помилки'", halign="center", font_style="Body", role="large")
-
-        read_btn = MDButton(on_release=self.read_dtc)
-        read_btn.add_widget(MDButtonText(text="Зчитати помилки"))
-
-        clear_btn = MDButton(on_release=self.clear_dtc)
-        clear_btn.add_widget(MDButtonText(text="Скинути помилки (Clear DTC)"))
-
-        layout.add_widget(self.dtc_label)
-        layout.add_widget(read_btn)
-        layout.add_widget(clear_btn)
-
-        self.add_widget(layout)
-
-    def read_dtc(self, instance):
-        dtcs = self.reader.read_dtc()
+    def read_dtc(self):
+        app = MDApp.get_running_app()
+        dtcs = app.reader.read_dtc()
         if dtcs:
             res = "Знайдені помилки:\n" + "\n".join([f"{code}: {desc}" for code, desc in dtcs])
-            self.dtc_label.text = res
+            self.ids.dtc_label.text = res
         else:
-            self.dtc_label.text = "Помилок не знайдено!"
+            self.ids.dtc_label.text = "Помилок не знайдено!"
 
-    def clear_dtc(self, instance):
-        if self.reader.clear_dtc():
-            self.dtc_label.text = "Помилки успішно скинуто!"
+    def clear_dtc(self):
+        app = MDApp.get_running_app()
+        if app.reader.clear_dtc():
+            self.ids.dtc_label.text = "Помилки успішно скинуто!"
         else:
-            self.dtc_label.text = "Помилка при скиданні."
+            self.ids.dtc_label.text = "Помилка при скиданні."
 
 
 class SettingsScreen(MDScreen):
-    """Екран налаштувань додатка"""
+    is_emulator = BooleanProperty(config.IS_EMULATOR)
 
-    def __init__(self, app_ref, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.app_ref = app_ref
+        self._ui_built = False
 
-        layout = MDBoxLayout(orientation='vertical', padding=20, spacing=20)
+    def on_enter(self, *args):
+        if not self._ui_built:
+            self.build_settings_ui()
+            self._ui_built = True
 
-        title = MDLabel(text="Налаштування", font_style="Headline", role="small", halign="center")
-        layout.add_widget(title)
+    def build_settings_ui(self):
+        if 'metrics_settings_box' not in self.ids:
+            return
 
-        # Перемикач режиму симулятора
-        sim_layout = MDBoxLayout(orientation='horizontal', spacing=10, size_hint_y=None, height="40dp")
-        sim_label = MDLabel(text="Режим симулятора (Emulator):", font_style="Body", role="large")
-        self.sim_switch = MDSwitch(active=config.IS_EMULATOR)
-        self.sim_switch.bind(active=self.toggle_emulator)
-        sim_layout.add_widget(sim_label)
-        sim_layout.add_widget(self.sim_switch)
+        self.style_buttons = {}
+        box = self.ids.metrics_settings_box
+        box.clear_widgets()
 
-        # Перемикач вигляду карток
-        style_layout = MDBoxLayout(orientation='horizontal', spacing=10, size_hint_y=None, height="40dp")
-        style_label = MDLabel(text="Вигляд карток:", font_style="Body", role="large")
+        metrics = [
+            ("rpm", "Оберти"),
+            ("speed", "Швидкість"),
+            ("coolant", "Температура"),
+            ("boost", "Наддув"),
+            ("voltage", "Напруга")
+        ]
 
-        btn_toggle_style = MDButton(on_release=self.toggle_card_style)
-        self.style_btn_text = MDButtonText(text=getattr(config, 'CARD_STYLE', 'Detailed'))
-        btn_toggle_style.add_widget(self.style_btn_text)
+        for key, name in metrics:
+            row = MDBoxLayout(
+                orientation='horizontal',
+                spacing="10dp",
+                size_hint_y=None,
+                height="40dp"
+            )
 
-        style_layout.add_widget(style_label)
-        style_layout.add_widget(btn_toggle_style)
+            lbl = MDLabel(
+                text=f"{name}:",
+                font_style="Body",
+                role="medium",
+                size_hint_y=None,
+                height="40dp"
+            )
 
-        layout.add_widget(sim_layout)
-        layout.add_widget(style_layout)
-        layout.add_widget(MDBoxLayout())  # Пружина/заповнювач знизу
+            curr_style = config.METRIC_STYLES.get(key, "text")
+            btn = MDButton(
+                on_release=lambda x, k=key: self.cycle_metric_style(k),
+                size_hint_y=None,
+                height="36dp"
+            )
+            btn_text = MDButtonText(text=curr_style.upper())
+            btn.add_widget(btn_text)
+            self.style_buttons[key] = btn_text
 
-        self.add_widget(layout)
+            row.add_widget(lbl)
+            row.add_widget(btn)
+            box.add_widget(row)
 
-    def toggle_emulator(self, instance, value):
-        config.IS_EMULATOR = value
-        # Перепідключаємо считувач
+    def toggle_emulator(self):
+        config.IS_EMULATOR = not config.IS_EMULATOR
+        self.is_emulator = config.IS_EMULATOR
+
+        app = MDApp.get_running_app()
         conn = OBDConnectionManager.get_connection()
-        self.app_ref.reader = TelemetryReader(conn)
-        self.app_ref.dashboard_screen.reader = self.app_ref.reader
-        self.app_ref.dtc_screen.reader = self.app_ref.reader
+        app.reader = TelemetryReader(conn)
 
-    def toggle_card_style(self, instance):
-        current = getattr(config, 'CARD_STYLE', 'Detailed')
-        new_style = "Compact" if current == "Detailed" else "Detailed"
-        config.CARD_STYLE = new_style
-        self.style_btn_text.text = new_style
+    def cycle_metric_style(self, key):
+        modes = ["text", "bar", "gauge", "chart"]
+        curr = config.METRIC_STYLES.get(key, "text")
+        next_mode = modes[(modes.index(curr) + 1) % len(modes)]
+
+        config.METRIC_STYLES[key] = next_mode
+        if key in self.style_buttons:
+            self.style_buttons[key].text = next_mode.upper()
+
+        app = MDApp.get_running_app()
+        card_id = f"card_{key}"
+        if card_id in app.dashboard_screen.ids:
+            app.dashboard_screen.ids[card_id].apply_style_layout()
 
 
 class DashboardApp(MDApp):
@@ -186,15 +365,14 @@ class DashboardApp(MDApp):
 
         self.sm = MDScreenManager()
 
-        self.dashboard_screen = DashboardScreen(self.reader, name="dashboard")
-        self.dtc_screen = DTCScreen(self.reader, name="dtc")
-        self.settings_screen = SettingsScreen(app_ref=self, name="settings")
+        self.dashboard_screen = DashboardScreen(name="dashboard")
+        self.dtc_screen = DTCScreen(name="dtc")
+        self.settings_screen = SettingsScreen(name="settings")
 
         self.sm.add_widget(self.dashboard_screen)
         self.sm.add_widget(self.dtc_screen)
         self.sm.add_widget(self.settings_screen)
 
-        # Нижня панель навігації (3 вкладки)
         nav_bar = MDNavigationBar()
 
         item_dash = MDNavigationItem(active=True)
@@ -228,8 +406,7 @@ class DashboardApp(MDApp):
 
     def update_loop(self, dt):
         if self.sm.current == "dashboard":
-            card_style = getattr(config, 'CARD_STYLE', 'Detailed')
-            self.dashboard_screen.update_metrics(card_style)
+            self.dashboard_screen.update_metrics(self.reader)
 
 
 if __name__ == "__main__":
