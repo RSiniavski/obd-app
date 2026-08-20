@@ -1,32 +1,39 @@
 <MetricCard>:
     style: "elevated"
+    theme_bg_color: "Custom"
     padding: ["8dp", "8dp", "8dp", "6dp"]
     spacing: "4dp"
     orientation: "vertical"
-    size_hint_x: root.card_size_hint_x
+    size_hint_x: 1.0 / root.card_columns if root.card_columns else 1.0
     size_hint_y: None
     height: root.card_height
+    md_bg_color: "#173F5F"
 
     # Верхня частина картки (Заголовок + Значення + Графік/Габарит)
     MDBoxLayout:
+        id: content_box
         orientation: "vertical"
         spacing: "2dp"
 
         MDLabel:
             id: title_lbl
-            text: root.title
+            text: root.title + (" (" + root.unit + ")" if root.unit else "")
+            text_size: self.width, self.height
             font_style: "Label"
             role: "medium"
             halign: "center"
+            valign: "middle"
             size_hint_y: None
             height: "18dp"
 
         MDLabel:
             id: value_lbl
-            text: "0 " + root.unit
+            text: "0"
+            text_size: self.width, self.height
             font_style: "Title"
             role: "medium"
             halign: "center"
+            valign: "middle"
             size_hint_y: None
             height: "30dp"
 
@@ -39,6 +46,7 @@
 
             MDLinearProgressIndicator:
                 id: progress_bar
+                indicator_color: "#FE4000"
                 value: 0
                 size_hint_y: None
                 height: "8dp"
@@ -56,71 +64,45 @@
                 height: "0dp"
                 opacity: 0
 
-    # Нижній блок керування розміром та перемикачем ширини (1/2/3 в рядок)
-    RelativeLayout:
-        size_hint_y: None
-        height: "24dp"
 
-        MDIconButton:
-            icon: "aspect-ratio"
-            style: "standard"
-            size_hint: None, None
-            size: "24dp", "24dp"
-            pos: 0, 0
-            on_release: root.cycle_width_span()
-
-        MDIconButton:
-            id: resize_handle
-            icon: "resize-bottom-right"
-            style: "standard"
-            size_hint: None, None
-            size: "24dp", "24dp"
-            pos: self.parent.width - self.width, 0
+<MiniGaugeWidget>:
+    MDLabel:
+        size: root.gauge_diameter * .65, root.gauge_diameter * .65
+        pos: root.center_x - self.width / 2, root.center_y - self.height / 2
+        text: root.value_text
+        text_size: self.size
+        halign: "center"
+        valign: "middle"
+        theme_text_color: "Custom"
+        text_color: root.value_color
+        font_size: max(14, root.gauge_diameter * .20)
 
 
 <DashboardScreen>:
-    MDScrollView:
-        id: main_scroll
-        do_scroll_x: False
+    MDBoxLayout:
+        orientation: "vertical"
 
-        # Відкоригований padding та spacing для ідеально рівних відступів
-        MDStackLayout:
-            id: dashboard_box
-            orientation: 'lr-tb'
-            padding: ["12dp", "12dp", "0dp", "12dp"]
-            spacing: "12dp"
+        MDLabel:
+            id: status_lbl
+            text: root.connection_status
+            font_style: "Label"
+            role: "medium"
+            halign: "center"
             size_hint_y: None
-            height: self.minimum_height
+            height: "28dp"
+            padding: ["8dp", "4dp", "8dp", "0dp"]
 
-            MetricCard:
-                id: card_rpm
-                key: "rpm"
-                title: "Оберти (RPM)"
-                unit: "RPM"
+        MDScrollView:
+            id: main_scroll
+            do_scroll_x: False
 
-            MetricCard:
-                id: card_speed
-                key: "speed"
-                title: "Швидкість"
-                unit: "km/h"
-
-            MetricCard:
-                id: card_coolant
-                key: "coolant"
-                title: "Температура"
-                unit: "°C"
-
-            MetricCard:
-                id: card_boost
-                key: "boost"
-                title: "Наддув (Boost)"
-                unit: "bar"
-
-            MetricCard:
-                id: card_voltage
-                key: "voltage"
-                title: "Напруга"
-                unit: "V"
+            MDStackLayout:
+                id: dashboard_box
+                orientation: 'lr-tb'
+                padding: ["12dp", "12dp", "12dp", "12dp"]
+                spacing: "12dp"
+                size_hint_y: None
+                height: self.minimum_height
 
 
 <DTCScreen>:
@@ -170,8 +152,8 @@
 <SettingsScreen>:
     MDBoxLayout:
         orientation: 'vertical'
-        padding: "20dp"
-        spacing: "15dp"
+        padding: ["16dp", "12dp", "16dp", "12dp"]
+        spacing: "10dp"
 
         MDLabel:
             text: "Налаштування"
@@ -179,32 +161,97 @@
             role: "small"
             halign: "center"
             size_hint_y: None
-            height: "40dp"
+            height: "36dp"
 
-        MDBoxLayout:
-            orientation: 'horizontal'
-            spacing: "10dp"
-            size_hint_y: None
-            height: "40dp"
+        MDScrollView:
+            do_scroll_x: False
 
-            MDLabel:
-                text: "Емулятор:"
-                font_style: "Body"
-                role: "large"
-
-            MDButton:
-                on_release: root.toggle_emulator()
+            MDBoxLayout:
+                orientation: 'vertical'
+                spacing: "12dp"
                 size_hint_y: None
-                height: "40dp"
-                MDButtonText:
-                    id: sim_btn_text
-                    text: "УВІМК" if root.is_emulator else "ВИМК"
+                height: self.minimum_height
 
-        MDBoxLayout:
-            id: metrics_settings_box
-            orientation: 'vertical'
-            spacing: "15dp"
-            size_hint_y: None
-            height: "300dp"
+                MDLabel:
+                    text: "Джерело даних"
+                    font_style: "Title"
+                    role: "small"
+                    size_hint_y: None
+                    height: "28dp"
 
-        MDBoxLayout:
+                MDBoxLayout:
+                    orientation: 'horizontal'
+                    spacing: "10dp"
+                    size_hint_y: None
+                    height: "40dp"
+
+                    MDLabel:
+                        text: "Режим:"
+                        font_style: "Body"
+                        role: "large"
+
+                    MDButton:
+                        on_release: root.toggle_emulator()
+                        size_hint_y: None
+                        height: "36dp"
+                        MDButtonText:
+                            id: sim_btn_text
+                            text: "Емулятор" if root.is_emulator else "Реальне авто"
+
+                MDLabel:
+                    id: conn_status_lbl
+                    text: root.connection_status
+                    font_style: "Label"
+                    role: "medium"
+                    size_hint_y: None
+                    height: "22dp"
+
+                MDBoxLayout:
+                    orientation: 'horizontal'
+                    spacing: "10dp"
+                    size_hint_y: None
+                    height: "40dp"
+
+                    MDLabel:
+                        id: port_hint_lbl
+                        text: "COM-порт:"
+                        font_style: "Body"
+                        role: "medium"
+                        size_hint_x: 0.4
+
+                    MDLabel:
+                        id: port_value_lbl
+                        text: root.port_value
+                        font_style: "Body"
+                        role: "medium"
+
+                    MDButton:
+                        on_release: root.cycle_port()
+                        size_hint_x: None
+                        width: "90dp"
+                        size_hint_y: None
+                        height: "36dp"
+                        MDButtonText:
+                            text: "Порт"
+
+                MDButton:
+                    on_release: root.reconnect()
+                    size_hint_x: 1
+                    size_hint_y: None
+                    height: "40dp"
+                    MDButtonText:
+                        text: "Перепідключити"
+
+                MDLabel:
+                    text: "Показники та віджети (Увімкнення / Стиль)"
+                    font_style: "Title"
+                    role: "small"
+                    size_hint_y: None
+                    height: "28dp"
+
+                MDBoxLayout:
+                    id: metrics_settings_box
+                    orientation: 'vertical'
+                    spacing: "8dp"
+                    size_hint_y: None
+                    height: self.minimum_height

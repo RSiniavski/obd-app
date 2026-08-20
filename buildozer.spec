@@ -5,34 +5,36 @@ title = OBD App
 package.name = obdapp
 package.domain = org.siniavski
 
-# Вихідний код
+# Вихідний код (обов'язково має містити main.py)
 source.dir = .
 source.include_exts = py,png,jpg,kv,json
 
 # Версія додатка
 version = 0.1.0
 
-# Необхідні залежності Python (Kivy, KivyMD для UI та pyjnius для Bluetooth)
-requirements = python3,kivy,kivymd,pyjnius
+# Залежності для Android
+requirements = python3,kivy,kivymd,pyjnius,pillow,obd,pyserial,pint,materialyoucolor,asynckivy,asyncgui
+
+# Виключити з APK зайві каталоги
+source.exclude_dirs = tests,.venv,.idea,.git,.buildozer,bin,emulator,__pycache__
 
 # Дозволи Android для роботи з Bluetooth
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION
+android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,ACCESS_FINE_LOCATION,ACCESS_COARSE_LOCATION
 
-# Налаштування системних версій Android API
+# Архітектури (спочатку лише arm64 — швидша збірка; для старих телефонів додайте armeabi-v7a)
+android.archs = arm64-v8a
+
+# Системні версії Android API
 android.minapi = 21
 android.api = 33
 android.ndk = 25b
+android.accept_sdk_license = True
 
-# Орієнтація екрана (portrait, landscape або all)
+# Орієнтація екрана
 orientation = portrait
-
-# Формат збірки (0 — вимкнути full-screen, 1 — увімкнути)
 fullscreen = 0
 
 [buildozer]
 
-# Рівень логування (2 = детальний вивід помилок збірки)
 log_level = 2
-
-# Попередження про запуск під root (0 = вимкнути)
 warn_on_root = 1

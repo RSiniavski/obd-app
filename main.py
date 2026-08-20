@@ -1,6 +1,13 @@
-import time
 import os
 import sys
+
+# Android APK entry (Buildozer requires main.py)
+if "ANDROID_ARGUMENT" in os.environ:
+    from gui.main_app import DashboardApp
+    DashboardApp().run()
+    raise SystemExit(0)
+
+import time
 import colorama
 import config
 from app.connection import OBDConnectionManager
@@ -145,7 +152,7 @@ def print_dashboard(metrics: dict, dtcs: list, status_msg: str = "", view_mode: 
         print(f" {YELLOW}Статус: {status_msg}{RESET}")
         print(f"{WHITE}------------------------------------------{RESET}")
 
-    mode_text = "Текст" if view_mode == "bars" else "Шкала"
+    mode_text = "Шкала" if view_mode == "bars" else "Текст"
     print(f" [{CYAN}M{RESET}] Режим: {mode_text} | [{CYAN}C{RESET}] Скинути | [{CYAN}R{RESET}] Оновити | [{CYAN}Ctrl+C{RESET}] Вихід")
 
 
