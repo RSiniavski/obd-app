@@ -39,9 +39,9 @@
     },
     "metric_styles": {
         "rpm": "bar",
-        "speed": "text",
-        "coolant": "gauge",
-        "boost": "bar",
+        "speed": "gauge",
+        "coolant": "text",
+        "boost": "chart",
         "voltage": "chart",
         "iat": "text",
         "rail_pressure": "gauge",
@@ -60,12 +60,12 @@
         "voltage": true,
         "iat": true,
         "rail_pressure": true,
-        "maf": true,
+        "maf": false,
         "engine_load": true,
-        "throttle": true,
+        "throttle": false,
         "fuel_level": true,
         "oil_temp": false,
-        "ambient_temp": true
+        "ambient_temp": false
     },
     "connection": {
         "is_emulator": true,

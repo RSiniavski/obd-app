@@ -9,3 +9,4 @@ __pycache__/
 bin/
 build_log.txt
 *.log
+.venv_wsl

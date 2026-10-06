@@ -6,24 +6,16 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import json
+from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.properties import BooleanProperty, StringProperty, NumericProperty, ColorProperty
 from kivy.graphics import Color, Line
 from kivy.uix.widget import Widget
-
-try:
-    from kivymd.tools.hotreload.app import MDApp
-except (ImportError, ModuleNotFoundError):
-    from kivymd.app import MDApp
-
-from kivymd.uix.card import MDCard
-from kivymd.uix.label import MDLabel
-from kivymd.uix.button import MDButton, MDButtonText, MDIconButton
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.screenmanager import MDScreenManager
-from kivymd.uix.navigationbar import MDNavigationBar, MDNavigationItem, MDNavigationItemIcon, MDNavigationItemLabel
-from kivymd.uix.boxlayout import MDBoxLayout
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.screenmanager import ScreenManager, Screen
 
 import config
 from app.connection import OBDConnectionManager, close_connection
@@ -34,10 +26,8 @@ KV_FILE = os.path.join(os.path.dirname(__file__), "ui_layout.kv")
 
 
 def load_settings():
-    """Load cards + connection + metrics settings from settings.json into config."""
     if not os.path.exists(SETTINGS_FILE):
         return {}
-
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -65,12 +55,7 @@ def load_settings():
     return data.get("cards", {})
 
 
-def load_saved_card_configs():
-    return load_settings()
-
-
 def save_settings():
-    """Persist cards, enabled metrics, and connection settings."""
     data = {
         "cards": getattr(config, "CARD_CONFIGS", {}),
         "metric_styles": config.METRIC_STYLES,
@@ -89,11 +74,7 @@ def save_settings():
         print(f"[App] Не вдалося зберегти налаштування: {e}")
 
 
-def save_card_configs():
-    save_settings()
-
-
-class MiniChartWidget(MDBoxLayout):
+class MiniChartWidget(BoxLayout):
     def __init__(self, max_points=150, **kwargs):
         super().__init__(**kwargs)
         self.max_points = max_points
@@ -147,7 +128,6 @@ class MiniGaugeWidget(Widget):
             return
 
         self.gauge_diameter = d
-
         x = self.x + (self.width - d) / 2
         y = self.y + (self.height - d) / 2
 
@@ -160,12 +140,11 @@ class MiniGaugeWidget(Widget):
             Line(ellipse=(x, y, d, d, -120, angle), width=4)
 
 
-# Ensure KV is loaded
 if os.path.exists(KV_FILE):
     Builder.load_file(KV_FILE)
 
 
-class MetricCard(MDCard):
+class MetricCard(BoxLayout):
     key = StringProperty("")
     title = StringProperty("")
     unit = StringProperty("")
@@ -174,22 +153,15 @@ class MetricCard(MDCard):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._resizing = False
         Clock.schedule_once(self._init_card, 0)
 
     def _init_card(self, dt):
         if not hasattr(config, "CARD_CONFIGS"):
-            config.CARD_CONFIGS = load_saved_card_configs()
+            config.CARD_CONFIGS = load_settings()
 
         cfg = config.CARD_CONFIGS.get(self.key, {})
         if "height" in cfg:
             self.card_height = cfg["height"]
-        if "size_hint_x" in cfg:
-            card_size_hint_x = cfg["size_hint_x"]
-            legacy_spans = {1: 1.0, 2: 0.475, 3: 0.31}
-            self.card_columns = min(
-                legacy_spans, key=lambda span: abs(legacy_spans[span] - card_size_hint_x)
-            )
         if "columns" in cfg:
             self.card_columns = int(cfg["columns"])
 
@@ -208,7 +180,7 @@ class MetricCard(MDCard):
         if self.key not in config.CARD_CONFIGS:
             config.CARD_CONFIGS[self.key] = {}
         config.CARD_CONFIGS[self.key]["columns"] = next_span
-        save_card_configs()
+        save_settings()
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
@@ -217,6 +189,7 @@ class MetricCard(MDCard):
         return super().on_touch_down(touch)
 
     def _set_layout(self, mode: str):
+        """Відновлена логіка регулювання розмірів внутрішніх елементів для кожного режиму."""
         if "title_lbl" not in self.ids or "value_lbl" not in self.ids or "visual_container" not in self.ids:
             return
 
@@ -226,15 +199,11 @@ class MetricCard(MDCard):
 
         title.size_hint_y = None
         title.height = "24dp"
-        title.font_style = "Label"
-        title.role = "medium"
 
         if mode == "text":
             self.ids.content_box.spacing = "14dp"
             value.size_hint_y = 1
-            value.font_size = "34dp"
-            value.font_style = "Display"
-            value.role = "medium"
+            value.font_size = "34sp"
             visual.size_hint_y = None
         elif mode == "gauge":
             self.ids.content_box.spacing = "4dp"
@@ -245,17 +214,13 @@ class MetricCard(MDCard):
         elif mode == "bar":
             self.ids.content_box.spacing = "6dp"
             value.size_hint_y = 1
-            value.font_size = "28dp"
-            value.font_style = "Headline"
-            value.role = "medium"
+            value.font_size = "28sp"
             visual.size_hint_y = None
         else:  # chart
             self.ids.content_box.spacing = "6dp"
             value.size_hint_y = None
             value.height = "38dp"
-            value.font_size = "28dp"
-            value.font_style = "Headline"
-            value.role = "medium"
+            value.font_size = "28sp"
             visual.size_hint_y = 1
 
         if mode != "gauge":
@@ -309,10 +274,10 @@ class MetricCard(MDCard):
     def _value_color(self, val):
         low, high = config.METRIC_CRITICAL_LIMITS.get(self.key, (None, None))
         if low is not None and val < low:
-            return "#42A5F5"
+            return [0.26, 0.64, 0.96, 1]
         if high is not None and val > high:
-            return "#EF5350"
-        return "#FFFFFF"
+            return [0.93, 0.32, 0.31, 1]
+        return [1, 1, 1, 1]
 
     def update_value(self, val):
         if "value_lbl" not in self.ids:
@@ -326,12 +291,10 @@ class MetricCard(MDCard):
 
         mode = config.METRIC_STYLES.get(self.key, "text")
         value_text = str(val)
-        value_color = (
-            self._value_color(val) if mode in {"bar", "chart"} else "#FFFFFF"
-        )
+        value_color = self._value_color(val) if mode in {"bar", "chart"} else [1, 1, 1, 1]
+
         self.ids.value_lbl.text = value_text
-        self.ids.value_lbl.theme_text_color = "Custom"
-        self.ids.value_lbl.text_color = value_color
+        self.ids.value_lbl.color = value_color
         if "gauge_widget" in self.ids:
             self.ids.gauge_widget.value_text = value_text
             self.ids.gauge_widget.value_color = value_color
@@ -347,7 +310,7 @@ class MetricCard(MDCard):
             self.ids.gauge_widget.set_norm_value(norm)
 
 
-class DashboardScreen(MDScreen):
+class DashboardScreen(Screen):
     connection_status = StringProperty("...")
 
     def __init__(self, **kwargs):
@@ -391,9 +354,9 @@ class DashboardScreen(MDScreen):
             self.ids.status_lbl.text = text
 
 
-class DTCScreen(MDScreen):
+class DTCScreen(Screen):
     def read_dtc(self):
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         dtcs = app.reader.read_dtc()
         if dtcs:
             res = "Знайдені помилки:\n" + "\n".join([f"{code}: {desc}" for code, desc in dtcs])
@@ -402,14 +365,14 @@ class DTCScreen(MDScreen):
             self.ids.dtc_label.text = "Помилок не знайдено!"
 
     def clear_dtc(self):
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         if app.reader.clear_dtc():
             self.ids.dtc_label.text = "Помилки успішно скинуто!"
         else:
             self.ids.dtc_label.text = "Помилка при скиданні."
 
 
-class SettingsScreen(MDScreen):
+class SettingsScreen(Screen):
     is_emulator = BooleanProperty(True)
     connection_status = StringProperty("")
     port_value = StringProperty("")
@@ -442,8 +405,8 @@ class SettingsScreen(MDScreen):
             return False
 
     def _sync_mode_button(self):
-        if "sim_btn_text" in self.ids:
-            self.ids.sim_btn_text.text = "Емулятор" if self.is_emulator else "Реальне авто"
+        if "sim_btn" in self.ids:
+            self.ids.sim_btn.text = "Режим: Емулятор" if self.is_emulator else "Режим: Реальне авто"
         if "port_hint_lbl" in self.ids:
             self.ids.port_hint_lbl.text = (
                 "Bluetooth MAC:" if self._is_android() else "COM-порт:"
@@ -452,7 +415,7 @@ class SettingsScreen(MDScreen):
             self.ids.port_value_lbl.text = self.port_value or "(не задано)"
 
     def _refresh_status(self):
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         if app and hasattr(app, "connection"):
             self.connection_status = OBDConnectionManager.connection_status(app.connection)
         else:
@@ -473,43 +436,41 @@ class SettingsScreen(MDScreen):
             is_enabled = config.ENABLED_METRICS.get(key, info.get("default_enabled", True))
             curr_style = config.METRIC_STYLES.get(key, info.get("default_style", "text"))
 
-            row = MDBoxLayout(
+            row = BoxLayout(
                 orientation="horizontal",
                 spacing="8dp",
                 size_hint_y=None,
                 height="44dp",
             )
 
-            toggle_btn = MDButton(
-                on_release=lambda x, k=key: self.toggle_metric_enabled(k),
+            toggle_btn = Button(
+                text="ВКЛ" if is_enabled else "ВИКЛ",
                 size_hint_x=None,
                 width="72dp",
                 size_hint_y=None,
                 height="36dp",
-                style="filled" if is_enabled else "outlined",
+                on_release=lambda x, k=key: self.toggle_metric_enabled(k),
             )
-            toggle_text = MDButtonText(text="ВКЛ" if is_enabled else "ВИКЛ")
-            toggle_btn.add_widget(toggle_text)
-            self.toggle_buttons[key] = (toggle_btn, toggle_text)
+            self.toggle_buttons[key] = toggle_btn
 
-            lbl = MDLabel(
+            lbl = Label(
                 text=f"{info['name']} ({info['unit']}):" if info['unit'] else f"{info['name']}:",
-                font_style="Body",
-                role="medium",
                 size_hint_y=None,
                 height="40dp",
+                halign="left",
+                valign="middle",
             )
+            lbl.bind(size=lbl.setter("text_size"))
 
-            style_btn = MDButton(
-                on_release=lambda x, k=key: self.cycle_metric_style(k),
+            style_btn = Button(
+                text=curr_style.upper(),
                 size_hint_x=None,
                 width="84dp",
                 size_hint_y=None,
                 height="36dp",
+                on_release=lambda x, k=key: self.cycle_metric_style(k),
             )
-            style_btn_text = MDButtonText(text=curr_style.upper())
-            style_btn.add_widget(style_btn_text)
-            self.style_buttons[key] = style_btn_text
+            self.style_buttons[key] = style_btn
 
             row.add_widget(toggle_btn)
             row.add_widget(lbl)
@@ -521,11 +482,9 @@ class SettingsScreen(MDScreen):
         config.ENABLED_METRICS[key] = new_state
 
         if key in self.toggle_buttons:
-            btn, txt = self.toggle_buttons[key]
-            txt.text = "ВКЛ" if new_state else "ВИКЛ"
-            btn.style = "filled" if new_state else "outlined"
+            self.toggle_buttons[key].text = "ВКЛ" if new_state else "ВИКЛ"
 
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         if hasattr(app, "dashboard_screen"):
             app.dashboard_screen.rebuild_cards()
 
@@ -540,15 +499,14 @@ class SettingsScreen(MDScreen):
         if key in self.style_buttons:
             self.style_buttons[key].text = next_mode.upper()
 
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         if hasattr(app, "dashboard_screen") and key in app.dashboard_screen.cards_map:
             app.dashboard_screen.cards_map[key].apply_style_layout()
 
         save_settings()
 
     def toggle_emulator(self):
-        """Switch between emulator and real car data source."""
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         use_emulator = not config.IS_EMULATOR
         app.switch_data_source(use_emulator=use_emulator)
         self.is_emulator = config.IS_EMULATOR
@@ -556,51 +514,22 @@ class SettingsScreen(MDScreen):
         self._refresh_status()
 
     def reconnect(self):
-        app = MDApp.get_running_app()
+        app = App.get_running_app()
         app.switch_data_source(use_emulator=config.IS_EMULATOR)
         self._refresh_status()
 
-    def cycle_port(self):
-        """Cycle common COM ports on desktop (useful for quick testing)."""
-        if self._is_android():
-            return
 
-        ports = ["COM3", "COM4", "COM5", "COM6", "COM7", "COM8"]
-        try:
-            idx = ports.index(config.REAL_OBD_PORT)
-            config.REAL_OBD_PORT = ports[(idx + 1) % len(ports)]
-        except ValueError:
-            config.REAL_OBD_PORT = ports[0]
-
-        self.port_value = config.REAL_OBD_PORT
-        self._sync_mode_button()
-        save_settings()
-
-
-class DashboardApp(MDApp):
-    DEBUG = True
-    KV_FILES = [KV_FILE]
-    AUTORELOADER_PATHS = [
-        (os.path.dirname(__file__), {"recursive": True}),
-        (_ROOT, {"recursive": False}),
-    ]
-
+class DashboardApp(App):
     def build(self):
-        return self.build_app()
-
-    def build_app(self):
-        self.theme_cls.theme_style = "Dark"
-        self.theme_cls.primary_palette = "Blue"
-
         if not hasattr(config, "CARD_CONFIGS"):
             config.CARD_CONFIGS = load_settings()
 
         self.connection = OBDConnectionManager.get_connection()
         self.reader = TelemetryReader(self.connection)
 
-        root_layout = MDBoxLayout(orientation="vertical")
+        root_layout = BoxLayout(orientation="vertical")
 
-        self.sm = MDScreenManager()
+        self.sm = ScreenManager()
 
         self.dashboard_screen = DashboardScreen(name="dashboard")
         self.dtc_screen = DTCScreen(name="dtc")
@@ -610,26 +539,15 @@ class DashboardApp(MDApp):
         self.sm.add_widget(self.dtc_screen)
         self.sm.add_widget(self.settings_screen)
 
-        nav_bar = MDNavigationBar()
+        nav_bar = BoxLayout(orientation="horizontal", size_hint_y=None, height="50dp", spacing="4dp")
 
-        item_dash = MDNavigationItem(active=True)
-        item_dash.add_widget(MDNavigationItemIcon(icon="gauge"))
-        item_dash.add_widget(MDNavigationItemLabel(text="Дашборд"))
-        item_dash.bind(on_release=lambda x: self.switch_screen("dashboard"))
+        btn_dash = Button(text="Дашборд", on_release=lambda x: self.switch_screen("dashboard"))
+        btn_dtc = Button(text="Помилки", on_release=lambda x: self.switch_screen("dtc"))
+        btn_settings = Button(text="Налаштування", on_release=lambda x: self.switch_screen("settings"))
 
-        item_dtc = MDNavigationItem()
-        item_dtc.add_widget(MDNavigationItemIcon(icon="car-wrench"))
-        item_dtc.add_widget(MDNavigationItemLabel(text="Помилки"))
-        item_dtc.bind(on_release=lambda x: self.switch_screen("dtc"))
-
-        item_settings = MDNavigationItem()
-        item_settings.add_widget(MDNavigationItemIcon(icon="cog"))
-        item_settings.add_widget(MDNavigationItemLabel(text="Налаштування"))
-        item_settings.bind(on_release=lambda x: self.switch_screen("settings"))
-
-        nav_bar.add_widget(item_dash)
-        nav_bar.add_widget(item_dtc)
-        nav_bar.add_widget(item_settings)
+        nav_bar.add_widget(btn_dash)
+        nav_bar.add_widget(btn_dtc)
+        nav_bar.add_widget(btn_settings)
 
         root_layout.add_widget(self.sm)
         root_layout.add_widget(nav_bar)
@@ -641,7 +559,6 @@ class DashboardApp(MDApp):
         return root_layout
 
     def switch_data_source(self, use_emulator: bool):
-        """Reconnect using emulator or real car."""
         close_connection(getattr(self, "connection", None))
 
         config.IS_EMULATOR = use_emulator
@@ -652,9 +569,6 @@ class DashboardApp(MDApp):
         self.reader = TelemetryReader(self.connection)
         save_settings()
         self._refresh_status_ui()
-
-        mode = "емулятор" if use_emulator else "реальне авто"
-        print(f"[App] Джерело даних: {mode}")
 
     def _refresh_status_ui(self):
         status = OBDConnectionManager.connection_status(self.connection)
