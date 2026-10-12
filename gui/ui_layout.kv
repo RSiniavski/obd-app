@@ -1,12 +1,15 @@
 #:kivy 2.3.0
+
 <MetricCard>:
     padding: ["8dp", "8dp", "8dp", "6dp"]
     spacing: "4dp"
     orientation: "vertical"
-    # Розрахунок ширини плитки під сітку з урахуванням spacing (12dp)
-    size_hint_x: ((1.0 / root.card_columns) - (dp(12) * (root.card_columns - 1) / (root.card_columns * self.parent.width))) if (root.card_columns and self.parent and self.parent.width > 0) else (1.0 / root.card_columns if root.card_columns else 1.0)
+    # Ширина плитки рахується у Python (_apply_grid_width):
+    # прив'язка до базової сітки з 6 колонок + реакція на зміну card_columns
+    size_hint_x: None
     size_hint_y: None
     height: dp(root.card_height)
+
     canvas.before:
         Color:
             # Колір за замовчуванням #173F5F
@@ -15,11 +18,13 @@
             pos: self.pos
             size: self.size
             radius: [8,]
+
     # Верхня частина картки (Заголовок + Значення + Графік/Габарит)
     BoxLayout:
         id: content_box
         orientation: "vertical"
         spacing: "2dp"
+
         Label:
             id: title_lbl
             text: root.title + (" (" + root.unit + ")" if root.unit else "")
@@ -29,6 +34,7 @@
             text_size: self.size
             font_size: min(dp(18), max(dp(11), self.height * 0.55))
             color: 0.8, 0.8, 0.8, 1
+
         Label:
             id: value_lbl
             text: "0"
@@ -39,12 +45,14 @@
             text_size: self.size
             font_size: min(dp(32), max(dp(16), self.height * 0.7))
             color: 1, 1, 1, 1
+
         BoxLayout:
             id: visual_container
             orientation: "vertical"
             size_hint_y: None
             height: "0dp"
             opacity: 0
+
             ProgressBar:
                 id: progress_bar
                 max: 100
@@ -52,16 +60,20 @@
                 size_hint_y: None
                 height: "8dp"
                 opacity: 0
+
             MiniChartWidget:
                 id: chart_widget
                 size_hint_y: None
                 height: "0dp"
                 opacity: 0
+
             MiniGaugeWidget:
                 id: gauge_widget
                 size_hint_y: None
                 height: "0dp"
                 opacity: 0
+
+
 <MiniGaugeWidget>:
     Label:
         size: root.gauge_diameter * .65, root.gauge_diameter * .65
@@ -72,20 +84,40 @@
         text_size: self.size
         color: root.value_color
         font_size: max(dp(12), root.gauge_diameter * 0.20)
+
+
 <DashboardScreen>:
     BoxLayout:
         orientation: "vertical"
-        Label:
-            id: status_lbl
-            text: root.connection_status
-            halign: "center"
-            valign: "middle"
+
+        BoxLayout:
+            orientation: "horizontal"
             size_hint_y: None
-            height: "32dp"
-            color: 0.2, 0.8, 0.2, 1
+            height: "36dp"
+            spacing: "8dp"
+            padding: ["8dp", "0dp", "8dp", "0dp"]
+
+            Label:
+                id: status_lbl
+                text: root.connection_status
+                halign: "left"
+                valign: "middle"
+                text_size: self.size
+                color: 0.2, 0.8, 0.2, 1
+
+            Button:
+                id: edit_btn
+                text: "Редагувати"
+                size_hint_x: None
+                width: "110dp"
+                size_hint_y: None
+                height: "36dp"
+                on_release: root.toggle_edit_mode()
+
         ScrollView:
             id: main_scroll
             do_scroll_x: False
+
             StackLayout:
                 id: dashboard_box
                 orientation: 'lr-tb'
@@ -93,11 +125,14 @@
                 spacing: "12dp"
                 size_hint_y: None
                 height: self.minimum_height
+
+
 <DTCScreen>:
     BoxLayout:
         orientation: 'vertical'
         padding: "20dp"
         spacing: "15dp"
+
         Label:
             text: "Діагностика (DTC)"
             font_size: "20sp"
@@ -106,6 +141,7 @@
             valign: "middle"
             size_hint_y: None
             height: "30dp"
+
         Label:
             id: dtc_label
             text: "Натисніть 'Зчитати помилки'"
@@ -113,6 +149,7 @@
             valign: "middle"
             text_size: self.size
             font_size: "16sp"
+
         Button:
             text: "Зчитати помилки"
             on_release: root.read_dtc()
@@ -120,6 +157,7 @@
             size_hint_y: None
             height: "48dp"
             pos_hint: {"center_x": 0.5}
+
         Button:
             text: "Скинути помилки (Clear DTC)"
             on_release: root.clear_dtc()
@@ -127,12 +165,16 @@
             size_hint_y: None
             height: "48dp"
             pos_hint: {"center_x": 0.5}
+
         Widget:
+
+
 <SettingsScreen>:
     BoxLayout:
         orientation: 'vertical'
         padding: ["16dp", "12dp", "16dp", "12dp"]
         spacing: "10dp"
+
         Label:
             text: "Налаштування"
             font_size: "20sp"
@@ -140,13 +182,16 @@
             halign: "center"
             size_hint_y: None
             height: "30dp"
+
         ScrollView:
             do_scroll_x: False
+
             BoxLayout:
                 orientation: 'vertical'
                 spacing: "12dp"
                 size_hint_y: None
                 height: self.minimum_height
+
                 Label:
                     text: "Джерело даних"
                     font_size: "16sp"
@@ -155,23 +200,27 @@
                     size_hint_y: None
                     height: "24dp"
                     text_size: self.size
+
                 BoxLayout:
                     orientation: 'horizontal'
                     spacing: "10dp"
                     size_hint_y: None
                     height: "40dp"
+
                     Label:
                         text: "Режим:"
                         font_size: "14sp"
                         halign: "left"
                         valign: "middle"
                         text_size: self.size
+
                     Button:
                         id: sim_btn
                         text: "Емулятор" if root.is_emulator else "Реальне авто"
                         on_release: root.toggle_emulator()
                         size_hint_y: None
                         height: "36dp"
+
                 Label:
                     id: conn_status_lbl
                     text: root.connection_status
@@ -179,11 +228,13 @@
                     color: 0.7, 0.7, 0.7, 1
                     size_hint_y: None
                     height: "20dp"
+
                 BoxLayout:
                     orientation: 'horizontal'
                     spacing: "10dp"
                     size_hint_y: None
                     height: "40dp"
+
                     Label:
                         id: port_hint_lbl
                         text: "COM-порт:"
@@ -192,6 +243,7 @@
                         halign: "left"
                         valign: "middle"
                         text_size: self.size
+
                     Label:
                         id: port_value_lbl
                         text: root.port_value
@@ -199,6 +251,7 @@
                         halign: "left"
                         valign: "middle"
                         text_size: self.size
+
                     Button:
                         text: "Порт"
                         on_release: getattr(root, 'cycle_port', lambda: None)()
@@ -206,12 +259,14 @@
                         width: "90dp"
                         size_hint_y: None
                         height: "36dp"
+
                 Button:
                     text: "Перепідключити"
                     on_release: root.reconnect()
                     size_hint_x: 1
                     size_hint_y: None
                     height: "40dp"
+
                 Label:
                     text: "Показники та віджети (Увімкнення / Стиль)"
                     font_size: "16sp"
@@ -220,6 +275,7 @@
                     size_hint_y: None
                     height: "30dp"
                     text_size: self.size
+
                 BoxLayout:
                     id: metrics_settings_box
                     orientation: 'vertical'

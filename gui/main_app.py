@@ -9,17 +9,15 @@ import json
 from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
-from kivy.metrics import dp
-from kivy.properties import BooleanProperty, StringProperty, NumericProperty, ColorProperty, ListProperty
-from kivy.graphics import Color, Line
+from kivy.properties import BooleanProperty, StringProperty, NumericProperty, ColorProperty
+from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, InstructionGroup
+from kivy.core.text import Label as CoreLabel
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
-from kivy.uix.popup import Popup
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.textinput import TextInput
 from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.metrics import dp
 
 import config
 from app.connection import OBDConnectionManager, close_connection
@@ -47,8 +45,8 @@ def load_settings():
         config.REAL_OBD_PORT = str(conn["obd_port"])
     if "bluetooth_mac" in conn:
         config.BLUETOOTH_MAC = str(conn.get("bluetooth_mac") or "")
-    if "bluetooth_name" in conn:
-        config.BLUETOOTH_NAME = str(conn.get("bluetooth_name") or "")
+
+    config.CARD_ORDER = [str(k) for k in (data.get("cards_order") or [])]
 
     saved_styles = data.get("metric_styles", {})
     if isinstance(saved_styles, dict):
@@ -58,18 +56,13 @@ def load_settings():
     if isinstance(saved_enabled, dict):
         config.ENABLED_METRICS.update(saved_enabled)
 
-    cards = data.get("cards", {})
-    # Старі збереження з columns=3 ламають UI на телефоні — нормалізуємо.
-    if isinstance(cards, dict):
-        for _key, cfg in cards.items():
-            if isinstance(cfg, dict) and int(cfg.get("columns", 1) or 1) >= 3:
-                cfg["columns"] = 1
-    return cards
+    return data.get("cards", {})
 
 
 def save_settings():
     data = {
         "cards": getattr(config, "CARD_CONFIGS", {}),
+        "cards_order": list(getattr(config, "CARD_ORDER", [])),
         "metric_styles": config.METRIC_STYLES,
         "enabled_metrics": config.ENABLED_METRICS,
         "connection": {
@@ -77,7 +70,6 @@ def save_settings():
             "use_tcp_emulator": bool(getattr(config, "USE_TCP_EMULATOR", False)),
             "obd_port": config.REAL_OBD_PORT,
             "bluetooth_mac": getattr(config, "BLUETOOTH_MAC", ""),
-            "bluetooth_name": getattr(config, "BLUETOOTH_NAME", ""),
         },
     }
     try:
@@ -158,17 +150,32 @@ if os.path.exists(KV_FILE):
 
 
 class MetricCard(BoxLayout):
+    # Базова сітка: 6 колонок. Половина = 3, третина = 2, вся ширина = 6 —
+    # тоді різні розміри плиток гарантовано стикаються по одних лініях.
+    BASE_COLUMNS = 6
+
     key = StringProperty("")
     title = StringProperty("")
     unit = StringProperty("")
-    card_height = NumericProperty(dp(120))
-    card_width = NumericProperty(dp(160))
-    card_columns = NumericProperty(1)
+    card_height = NumericProperty(130)
+    card_columns = NumericProperty(2)
+    edit_mode = BooleanProperty(False)
+    selected = BooleanProperty(False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._long_press_ev = None
-        self.bind(card_columns=self._schedule_width_update)
+        self._touch_start = (0, 0)
+        self._dragging = False
+        self._chip_rect = None
+        self._ghost_group = None
+        self._ghost_rect = None
+        self._ghost_lrect = None
+        self._ghost_lbl = None
+        self._ind_group = None
+        self._ind_line = None
+        self._resize_lbl = None
+        self._bound_parent = None
+        self.bind(pos=self._redraw_overlays, size=self._redraw_overlays)
         Clock.schedule_once(self._init_card, 0)
 
     def _init_card(self, dt):
@@ -179,38 +186,61 @@ class MetricCard(BoxLayout):
         if "height" in cfg:
             self.card_height = cfg["height"]
         if "columns" in cfg:
-            # 3 колонки на телефоні ламають текст — обмежуємо до 2 за замовчуванням сітки
-            cols = int(cfg["columns"])
-            self.card_columns = 2 if cols >= 3 else max(1, cols)
+            self.card_columns = int(cfg["columns"])
 
-        if self.parent:
-            self.parent.bind(size=self._schedule_width_update)
         self.apply_style_layout()
-        self._update_card_width()
 
-    def _schedule_width_update(self, *args):
-        Clock.schedule_once(lambda dt: self._update_card_width(), 0)
-
-    def _update_card_width(self):
+    def span_width(self, parent_width):
+        """Ширина плитки: span базових колонок + відступи між ними,
+        без урахування padding контейнера — так поля зліва і справа однакові."""
         parent = self.parent
-        if not parent or parent.width <= 0:
-            return
+        if parent is None or parent_width <= 0:
+            return dp(60)
+        base = MetricCard.BASE_COLUMNS
+        span = {1: base, 2: base // 2, 3: base // 3}.get(int(self.card_columns), base // 2)
+        spacing = parent.spacing[0] if isinstance(parent.spacing, (list, tuple)) else parent.spacing
+        padding = parent.padding if isinstance(parent.padding, (list, tuple)) else (0, 0, 0, 0)
+        avail = parent_width - padding[0] - padding[2]
+        if avail <= 0:
+            return dp(40)
+        unit = (avail - spacing * (base - 1)) / base
+        width = span * unit + (span - 1) * spacing
+        return max(dp(40), min(int(width), avail))
 
-        n = max(1, int(self.card_columns))
-        spacing = float(getattr(parent, "spacing", [0, 0])[0] or 0)
-        padding = getattr(parent, "padding", [0, 0, 0, 0])
-        pad_x = float(padding[0]) + float(padding[2]) if len(padding) >= 4 else float(padding[0]) * 2
-        avail = max(0.0, float(parent.width) - pad_x - spacing * (n - 1))
-        self.card_width = avail / n
-        self._apply_fonts()
+    def on_parent(self, *args):
+        self._bind_grid_parent()
+
+    def _bind_grid_parent(self):
+        parent = self.parent
+        if self._bound_parent is not parent:
+            if self._bound_parent is not None:
+                try:
+                    self._bound_parent.unbind(width=self._apply_grid_width)
+                except Exception:
+                    pass
+            self._bound_parent = parent
+            if parent is not None:
+                parent.bind(width=self._apply_grid_width)
+        self._apply_grid_width()
+
+    def _apply_grid_width(self, *args):
+        """Миттєво перераховує ширину плитки (викликається при зміні card_columns
+        та ширини контейнера)."""
+        parent = self.parent
+        if parent is None or parent.width <= 0:
+            return
+        self.width = self.span_width(parent.width)
+
+    def on_card_columns(self, *args):
+        self._apply_grid_width()
 
     def cycle_width_span(self):
-        spans = [1, 2]
+        spans = [1, 2, 3]
         try:
-            curr_idx = spans.index(self.card_columns if self.card_columns in spans else 1)
+            curr_idx = spans.index(self.card_columns)
             next_span = spans[(curr_idx + 1) % len(spans)]
         except ValueError:
-            next_span = 1
+            next_span = 2
 
         self.card_columns = next_span
 
@@ -218,50 +248,182 @@ class MetricCard(BoxLayout):
             config.CARD_CONFIGS[self.key] = {}
         config.CARD_CONFIGS[self.key]["columns"] = next_span
         save_settings()
-        self._update_card_width()
+
+    # --- Edit mode: іконка ↔ = розмір, тап = виділити/поміняти, drag = перемістити ---
+    def on_selected(self, *args):
+        self._redraw_overlays()
+
+    def on_edit_mode(self, *args):
+        self._drag_cleanup()
+        self._dragging = False
+        self.opacity = 1
+        self._redraw_overlays()
+
+    def _redraw_overlays(self, *args):
+        self.canvas.after.clear()
+        if self.selected:
+            with self.canvas.after:
+                Color(0.99, 0.65, 0.1, 1)
+                Line(rounded_rectangle=(self.x, self.y, self.width, self.height, 8), width=2)
+        if self.edit_mode:
+            # іконка зміни розміру у верхньому правому куті картки
+            chip_w, chip_h = dp(34), dp(24)
+            cx = self.right - chip_w - dp(4)
+            cy = self.top - chip_h - dp(4)
+            self._chip_rect = (cx, cy, chip_w, chip_h)
+            if self._resize_lbl is None:
+                self._resize_lbl = CoreLabel(text="\u2194", font_size=dp(16), color=(1, 1, 1, 1))
+                self._resize_lbl.refresh()
+            tex = self._resize_lbl.texture
+            with self.canvas.after:
+                Color(0, 0, 0, 0.35)
+                RoundedRectangle(pos=(cx, cy), size=(chip_w, chip_h), radius=[6,])
+                if tex:
+                    Color(1, 1, 1, 1)
+                    Rectangle(texture=tex, size=tex.size,
+                              pos=(cx + (chip_w - tex.width) / 2, cy + (chip_h - tex.height) / 2))
+        else:
+            self._chip_rect = None
+
+    def _screen(self):
+        app = App.get_running_app()
+        return getattr(app, "dashboard_screen", None) if app else None
 
     def on_touch_down(self, touch):
-        if self.collide_point(*touch.pos):
-            touch.ud["metric_card"] = self
-            self._long_press_ev = Clock.schedule_once(lambda dt: self._on_long_press(touch), 0.45)
-        return super().on_touch_down(touch)
-
-    def on_touch_up(self, touch):
-        if self._long_press_ev:
-            self._long_press_ev.cancel()
-            self._long_press_ev = None
-        return super().on_touch_up(touch)
+        if not self.edit_mode or not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+        chip = self._chip_rect
+        if chip and chip[0] <= touch.x <= chip[0] + chip[2] and chip[1] <= touch.y <= chip[1] + chip[3]:
+            # клік по іконці розміру: малий -> середній -> вся ширина -> малий
+            self.cycle_width_span()
+            return True
+        touch.grab(self)
+        self._touch_start = (touch.x, touch.y)
+        self._dragging = False
+        return True
 
     def on_touch_move(self, touch):
-        if touch.ud.get("metric_card") is self and self._long_press_ev:
-            if abs(touch.dx) + abs(touch.dy) > dp(8):
-                self._long_press_ev.cancel()
-                self._long_press_ev = None
-        return super().on_touch_move(touch)
+        if touch.grab_current is not self:
+            return super().on_touch_move(touch)
+        if not self._dragging:
+            moved = (abs(touch.x - self._touch_start[0]) > dp(20)
+                     or abs(touch.y - self._touch_start[1]) > dp(20))
+            if moved:
+                self._dragging = True
+                self.opacity = 0.55
+                self._ghost_start(touch)
+        if self._dragging:
+            self._ghost_move(touch)
+        return True
 
-    def _on_long_press(self, touch):
-        self._long_press_ev = None
-        if self.collide_point(*touch.pos):
-            self.cycle_width_span()
+    def _drag_window_pos(self, touch):
+        """touch-координати локальні відносно картки -> координати вікна."""
+        return self.to_window(touch.x, touch.y)
 
-    def _apply_fonts(self):
-        if "title_lbl" not in self.ids or "value_lbl" not in self.ids:
+    def on_touch_up(self, touch):
+        if touch.grab_current is not self:
+            return super().on_touch_up(touch)
+        touch.ungrab(self)
+        was_dragging = self._dragging
+        self.opacity = 1
+        self._dragging = False
+        self._drag_cleanup()
+        if not was_dragging:
+            # звичайний тап: виділити або поміняти місцями з виділеною
+            screen = self._screen()
+            if screen:
+                if screen.selected_key and screen.selected_key != self.key:
+                    screen.swap_cards(screen.selected_key, self.key)
+                    screen.selected_key = None
+                else:
+                    screen.selected_key = None if screen.selected_key == self.key else self.key
+            return True
+        screen = self._screen()
+        if screen and "dashboard_box" in screen.ids:
+            idx = screen._drop_index_for(self, self._drag_window_pos(touch))
+            screen.reorder_card_to(self, idx)
+        return True
+
+    # --- "Привид" картки під час перетягування + зелена лінія вставки ---
+    def _ghost_start(self, touch):
+        win = self.get_root_window()
+        if not win:
             return
+        wx, wy = self._drag_window_pos(touch)
+        # зсув між пальцем і центром картки: привид стартує точно з місця картки
+        cx, cy = self.to_window(self.center_x, self.center_y)
+        self._drag_offset = (cx - wx, cy - wy)
+        grp = InstructionGroup()
+        grp.add(Color(0.09, 0.247, 0.373, 0.85))
+        gx, gy = wx + self._drag_offset[0] - self.width / 2, wy + self._drag_offset[1] - self.height / 2
+        self._ghost_rect = RoundedRectangle(pos=(gx, gy), size=(self.width, self.height), radius=[8,])
+        grp.add(self._ghost_rect)
+        if self._ghost_lbl is None:
+            self._ghost_lbl = CoreLabel(text=self.title or "", font_size=dp(14),
+                                        bold=True, color=(1, 1, 1, 1))
+            self._ghost_lbl.refresh()
+        tex = self._ghost_lbl.texture
+        if tex:
+            self._ghost_lrect = Rectangle(texture=tex, size=tex.size)
+            grp.add(self._ghost_lrect)
+        win.canvas.after.add(grp)
+        self._ghost_group = grp
 
-        mode = config.METRIC_STYLES.get(self.key, "text")
-        w = max(1.0, float(self.card_width))
-        title_size = 11 if w < dp(140) else 13
-        if mode == "text":
-            value_size = 26 if w < dp(140) else 32
-        elif mode == "bar":
-            value_size = 22 if w < dp(140) else 26
+    def _ghost_move(self, touch):
+        wx, wy = self._drag_window_pos(touch)
+        gx = wx + self._drag_offset[0] - self.width / 2
+        gy = wy + self._drag_offset[1] - self.height / 2
+        if self._ghost_rect:
+            self._ghost_rect.pos = (gx, gy)
+        tex = self._ghost_lbl.texture if self._ghost_lbl else None
+        if tex and self._ghost_lrect:
+            self._ghost_lrect.pos = (gx + self.width / 2 - tex.width / 2,
+                                     gy + self.height - tex.height - dp(8))
+        self._indicator_move(touch)
+
+    def _indicator_move(self, touch):
+        screen = self._screen()
+        if not screen or "dashboard_box" not in screen.ids:
+            return
+        box = screen.ids.dashboard_box
+        idx = screen._drop_index_for(self, self._drag_window_pos(touch))
+        display = list(reversed(box.children))
+        without = [c for c in display if c is not self]
+        if not without:
+            return
+        spacing_x = box.spacing[0] if isinstance(box.spacing, (list, tuple)) else dp(6)
+        if idx < len(without):
+            anchor = without[idx]
+            x, y, h = anchor.x - spacing_x / 2, anchor.y, anchor.height
         else:
-            value_size = 20 if w < dp(140) else 24
+            anchor = without[-1]
+            x, y, h = anchor.right + spacing_x / 2, anchor.y, anchor.height
+        wx, wy = box.to_window(x, y)
+        _, wtop = box.to_window(x, y + h)
+        win = self.get_root_window()
+        if not win:
+            return
+        if self._ind_line is None:
+            self._ind_line = Line(points=[wx, wy, wx, wtop], width=dp(2))
+            self._ind_group = InstructionGroup()
+            self._ind_group.add(Color(0.2, 0.85, 0.4, 0.95))
+            self._ind_group.add(self._ind_line)
+            win.canvas.after.add(self._ind_group)
+        else:
+            self._ind_line.points = [wx, wy, wx, wtop]
 
-        self.ids.title_lbl.font_size = f"{title_size}sp"
-        self.ids.value_lbl.font_size = f"{value_size}sp"
+    def _drag_cleanup(self):
+        win = self.get_root_window()
+        if win:
+            if self._ghost_group:
+                win.canvas.after.remove(self._ghost_group)
+            if self._ind_group:
+                win.canvas.after.remove(self._ind_group)
+        self._ghost_group = self._ghost_rect = self._ghost_lrect = None
+        self._ind_group = self._ind_line = None
 
     def _set_layout(self, mode: str):
+        """Відновлена логіка регулювання розмірів внутрішніх елементів для кожного режиму."""
         if "title_lbl" not in self.ids or "value_lbl" not in self.ids or "visual_container" not in self.ids:
             return
 
@@ -270,43 +432,33 @@ class MetricCard(BoxLayout):
         visual = self.ids.visual_container
 
         title.size_hint_y = None
-        title.height = dp(22)
-        title.opacity = 1
+        title.height = "24dp"
 
         if mode == "text":
-            self.card_height = dp(100)
-            self.ids.content_box.spacing = dp(6)
+            self.ids.content_box.spacing = "14dp"
             value.size_hint_y = 1
-            value.height = 0
-            value.opacity = 1
+            value.font_size = "34sp"
             visual.size_hint_y = None
-            visual.height = 0
         elif mode == "gauge":
-            self.card_height = dp(140)
-            self.ids.content_box.spacing = dp(2)
+            self.ids.content_box.spacing = "4dp"
             value.size_hint_y = None
-            value.height = 0
+            value.height = "0dp"
             value.opacity = 0
             visual.size_hint_y = 1
-            visual.height = 0
         elif mode == "bar":
-            self.card_height = dp(110)
-            self.ids.content_box.spacing = dp(4)
+            self.ids.content_box.spacing = "6dp"
             value.size_hint_y = 1
-            value.height = 0
-            value.opacity = 1
+            value.font_size = "28sp"
             visual.size_hint_y = None
-            visual.height = dp(14)
         else:  # chart
-            self.card_height = dp(140)
-            self.ids.content_box.spacing = dp(4)
+            self.ids.content_box.spacing = "6dp"
             value.size_hint_y = None
-            value.height = dp(32)
-            value.opacity = 1
+            value.height = "38dp"
+            value.font_size = "28sp"
             visual.size_hint_y = 1
-            visual.height = 0
 
-        self._apply_fonts()
+        if mode != "gauge":
+            value.opacity = 1
 
     def apply_style_layout(self):
         mode = config.METRIC_STYLES.get(self.key, "text")
@@ -325,30 +477,32 @@ class MetricCard(BoxLayout):
         gauge.size_hint_y = None
 
         if mode == "text":
-            visual.height = 0
+            visual.height = "0dp"
             visual.opacity = 0
-            progress.height = chart.height = gauge.height = 0
+            progress.height = chart.height = gauge.height = "0dp"
             progress.opacity = chart.opacity = gauge.opacity = 0
         elif mode == "bar":
-            visual.height = dp(14)
+            visual.height = "12dp"
             visual.opacity = 1
-            progress.height = dp(10)
+            progress.height = "10dp"
             progress.opacity = 1
-            chart.height = gauge.height = 0
+            chart.height = gauge.height = "0dp"
             chart.opacity = gauge.opacity = 0
         elif mode == "chart":
+            visual.height = 0
             visual.opacity = 1
             chart.size_hint_y = 1
             chart.height = 0
             chart.opacity = 1
-            progress.height = gauge.height = 0
+            progress.height = gauge.height = "0dp"
             progress.opacity = gauge.opacity = 0
         elif mode == "gauge":
+            visual.height = 0
             visual.opacity = 1
             gauge.size_hint_y = 1
             gauge.height = 0
             gauge.opacity = 1
-            progress.height = chart.height = 0
+            progress.height = chart.height = "0dp"
             progress.opacity = chart.opacity = 0
 
     def _value_color(self, val):
@@ -371,7 +525,7 @@ class MetricCard(BoxLayout):
 
         mode = config.METRIC_STYLES.get(self.key, "text")
         value_text = str(val)
-        value_color = self._value_color(val) if mode in {"bar", "chart", "gauge"} else [1, 1, 1, 1]
+        value_color = self._value_color(val) if mode in {"bar", "chart"} else [1, 1, 1, 1]
 
         self.ids.value_lbl.text = value_text
         self.ids.value_lbl.color = value_color
@@ -392,7 +546,8 @@ class MetricCard(BoxLayout):
 
 class DashboardScreen(Screen):
     connection_status = StringProperty("...")
-    status_color = ListProperty([0.2, 0.8, 0.2, 1])
+    edit_mode = BooleanProperty(False)
+    selected_key = StringProperty(None, allownone=True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -407,22 +562,93 @@ class DashboardScreen(Screen):
         box.clear_widgets()
         self.cards_map = {}
 
-        for key, info in config.METRICS_INFO.items():
-            if config.ENABLED_METRICS.get(key, info.get("default_enabled", True)):
-                card = MetricCard(
-                    key=key,
-                    title=info["name"],
-                    unit=info["unit"],
-                )
-                self.cards_map[key] = card
-                box.add_widget(card)
-                card._update_card_width()
+        keys_enabled = [
+            key for key, info in config.METRICS_INFO.items()
+            if config.ENABLED_METRICS.get(key, info.get("default_enabled", True))
+        ]
+        # Порядок із налаштувань, нові показники — в кiнець
+        order = list(getattr(config, "CARD_ORDER", []))
+        ordered = [k for k in order if k in keys_enabled]
+        ordered += [k for k in keys_enabled if k not in ordered]
 
-        box.bind(size=self._relayout_cards)
+        for key in ordered:
+            info = config.METRICS_INFO[key]
+            card = MetricCard(
+                key=key,
+                title=info["name"],
+                unit=info["unit"],
+            )
+            card.edit_mode = self.edit_mode
+            self.cards_map[key] = card
+            box.add_widget(card)
 
-    def _relayout_cards(self, *args):
+    # --- Режим редагування сітки ---
+    def toggle_edit_mode(self):
+        self.edit_mode = not self.edit_mode
+        if "edit_btn" in self.ids:
+            self.ids.edit_btn.text = "Готово" if self.edit_mode else "Редагувати"
+        if "main_scroll" in self.ids:
+            self.ids.main_scroll.do_scroll_y = not self.edit_mode
         for card in self.cards_map.values():
-            card._update_card_width()
+            card.edit_mode = self.edit_mode
+        self.selected_key = None
+
+    def on_selected_key(self, *args):
+        for key, card in self.cards_map.items():
+            card.selected = (key == self.selected_key)
+
+    def swap_cards(self, key_a, key_b):
+        if "dashboard_box" not in self.ids:
+            return
+        a = self.cards_map.get(key_a)
+        b = self.cards_map.get(key_b)
+        if not a or not b:
+            return
+        box = self.ids.dashboard_box
+        display = list(reversed(box.children))
+        i, j = display.index(a), display.index(b)
+        display[i], display[j] = display[j], display[i]
+        box.clear_widgets()
+        for c in display:
+            box.add_widget(c)
+        self._save_order(display)
+
+    def _save_order(self, display):
+        config.CARD_ORDER = [c.key for c in display]
+        save_settings()
+
+    def _drop_index_for(self, dragged, win_pos):
+        """Індекс вставки dragged у display-порядок за позицією дотику (в координатах вікна)."""
+        if "dashboard_box" not in self.ids:
+            return 0
+        box = self.ids.dashboard_box
+        lx, ly = box.to_widget(win_pos[0], win_pos[1])
+        display = list(reversed(box.children))
+        without = [c for c in display if c is not dragged]
+        idx = len(without)
+        for i, c in enumerate(without):
+            if ly > c.top:
+                idx = i          # вище цієї картки -> вставити перед нею
+                break
+            if c.y <= ly <= c.top:
+                # той самий рядок: ліва половина -> перед, права -> після
+                idx = i + (1 if lx > c.center_x else 0)
+                break
+        return max(0, min(idx, len(without)))
+
+    def reorder_card_to(self, card, idx):
+        """Переставити card на позицію idx і зберегти порядок."""
+        if "dashboard_box" not in self.ids:
+            return
+        box = self.ids.dashboard_box
+        display = list(reversed(box.children))
+        without = [c for c in display if c is not card]
+        idx = max(0, min(idx, len(without)))
+        desired = without[:idx] + [card] + without[idx:]
+        box.clear_widgets()
+        for c in desired:
+            box.add_widget(c)
+        self._save_order(desired)
 
     def update_metrics(self, reader):
         data = reader.read_metrics()
@@ -438,16 +664,8 @@ class DashboardScreen(Screen):
 
     def set_status(self, text: str):
         self.connection_status = text
-        lower = (text or "").lower()
-        if "помилка" in lower or "немає" in lower or "оберіть" in lower:
-            self.status_color = [1.0, 0.45, 0.2, 1]
-        elif "підключено" in lower:
-            self.status_color = [0.2, 0.8, 0.2, 1]
-        else:
-            self.status_color = [0.75, 0.75, 0.75, 1]
         if "status_lbl" in self.ids:
             self.ids.status_lbl.text = text
-            self.ids.status_lbl.color = self.status_color
 
 
 class DTCScreen(Screen):
@@ -478,11 +696,14 @@ class SettingsScreen(Screen):
         self._ui_built = False
         self.style_buttons = {}
         self.toggle_buttons = {}
-        self._device_popup = None
 
     def on_enter(self, *args):
         self.is_emulator = config.IS_EMULATOR
-        self._refresh_port_value()
+        self.port_value = (
+            getattr(config, "BLUETOOTH_MAC", "")
+            if self._is_android()
+            else config.REAL_OBD_PORT
+        )
         self._refresh_status()
         if not self._ui_built:
             self.build_settings_ui()
@@ -497,26 +718,13 @@ class SettingsScreen(Screen):
         except ImportError:
             return False
 
-    def _refresh_port_value(self):
-        if self._is_android():
-            name = getattr(config, "BLUETOOTH_NAME", "")
-            mac = getattr(config, "BLUETOOTH_MAC", "")
-            if name and mac:
-                self.port_value = f"{name} ({mac})"
-            else:
-                self.port_value = mac or name or ""
-        else:
-            self.port_value = config.REAL_OBD_PORT or ""
-
     def _sync_mode_button(self):
         if "sim_btn" in self.ids:
             self.ids.sim_btn.text = "Режим: Емулятор" if self.is_emulator else "Режим: Реальне авто"
         if "port_hint_lbl" in self.ids:
             self.ids.port_hint_lbl.text = (
-                "Адаптер:" if self._is_android() else "COM-порт:"
+                "Bluetooth MAC:" if self._is_android() else "COM-порт:"
             )
-        if "port_btn" in self.ids:
-            self.ids.port_btn.text = "Обрати" if self._is_android() else "Порт"
         if "port_value_lbl" in self.ids:
             self.ids.port_value_lbl.text = self.port_value or "(не задано)"
 
@@ -613,169 +821,15 @@ class SettingsScreen(Screen):
 
     def toggle_emulator(self):
         app = App.get_running_app()
-        switching_to_real = config.IS_EMULATOR
-
-        if switching_to_real and self._is_android() and not getattr(config, "BLUETOOTH_MAC", ""):
-            # Спочатку вибір адаптера, підключення після вибору.
-            config.IS_EMULATOR = False
-            config.USE_TCP_EMULATOR = False
-            self.is_emulator = False
-            save_settings()
-            self._sync_mode_button()
-            self._refresh_status()
-            self.select_device()
-            return
-
-        app.switch_data_source(use_emulator=not switching_to_real)
+        use_emulator = not config.IS_EMULATOR
+        app.switch_data_source(use_emulator=use_emulator)
         self.is_emulator = config.IS_EMULATOR
         self._sync_mode_button()
         self._refresh_status()
 
-    def select_device(self):
-        """Android: список paired BT. Desktop: введення COM-порту."""
-        if self._is_android():
-            self._open_bt_picker()
-        else:
-            self._open_com_editor()
-
-    def _open_com_editor(self):
-        content = BoxLayout(orientation="vertical", spacing="8dp", padding="12dp")
-        hint = Label(
-            text="Вкажіть COM-порт ELM327 (наприклад COM5):",
-            size_hint_y=None,
-            height="28dp",
-        )
-        inp = TextInput(
-            text=config.REAL_OBD_PORT or "",
-            multiline=False,
-            size_hint_y=None,
-            height="40dp",
-        )
-        buttons = BoxLayout(orientation="horizontal", spacing="8dp", size_hint_y=None, height="40dp")
-
-        popup = Popup(title="COM-порт", content=content, size_hint=(0.9, 0.35))
-
-        def _save(_btn):
-            port = (inp.text or "").strip()
-            if port:
-                config.REAL_OBD_PORT = port
-                save_settings()
-                self._refresh_port_value()
-                self._sync_mode_button()
-            popup.dismiss()
-            if not config.IS_EMULATOR:
-                self.reconnect()
-
-        buttons.add_widget(Button(text="Скасувати", on_release=lambda *_: popup.dismiss()))
-        buttons.add_widget(Button(text="Зберегти", on_release=_save))
-        content.add_widget(hint)
-        content.add_widget(inp)
-        content.add_widget(buttons)
-        popup.open()
-
-    def _open_bt_picker(self):
-        from app.android_bt import request_bt_permissions, list_bonded_devices
-
-        self.connection_status = "Запит дозволів Bluetooth..."
-        if "conn_status_lbl" in self.ids:
-            self.ids.conn_status_lbl.text = self.connection_status
-
-        def _after_permissions(ok, _perms):
-            # Callback може прийти з Java-потоку — UI тільки через Clock.
-            Clock.schedule_once(lambda dt: self._show_bt_device_list(ok), 0)
-
-        request_bt_permissions(_after_permissions)
-
-    def _show_bt_device_list(self, permissions_ok: bool):
-        from app.android_bt import list_bonded_devices
-
-        if self._device_popup:
-            self._device_popup.dismiss()
-            self._device_popup = None
-
-        root = BoxLayout(orientation="vertical", spacing="8dp", padding="10dp")
-        info = Label(
-            text=(
-                "Оберіть paired ELM327.\n"
-                "Якщо списку немає — спочатку зв'яжіть адаптер у налаштуваннях Bluetooth телефону (PIN 1234/0000)."
-                if permissions_ok
-                else "Немає дозволів Bluetooth. Дозвольте їх у налаштуваннях додатка і спробуйте знову."
-            ),
-            size_hint_y=None,
-            height="72dp",
-            halign="left",
-            valign="middle",
-        )
-        info.bind(size=info.setter("text_size"))
-        root.add_widget(info)
-
-        scroll = ScrollView(do_scroll_x=False)
-        device_box = BoxLayout(orientation="vertical", spacing="6dp", size_hint_y=None)
-        device_box.bind(minimum_height=device_box.setter("height"))
-        scroll.add_widget(device_box)
-        root.add_widget(scroll)
-
-        popup = Popup(title="Bluetooth-адаптери", content=root, size_hint=(0.95, 0.8))
-        self._device_popup = popup
-
-        def _refresh_list(_btn=None):
-            device_box.clear_widgets()
-            devices = list_bonded_devices() if permissions_ok else []
-            if not devices:
-                device_box.add_widget(
-                    Label(
-                        text="Немає paired-пристроїв",
-                        size_hint_y=None,
-                        height="40dp",
-                    )
-                )
-            for dev in devices:
-                label = f"{dev['name']}\n{dev['mac']}"
-                btn = Button(
-                    text=label,
-                    size_hint_y=None,
-                    height="56dp",
-                    halign="center",
-                    on_release=lambda _b, d=dev: self._on_bt_device_chosen(d, popup),
-                )
-                device_box.add_widget(btn)
-
-        actions = BoxLayout(orientation="horizontal", spacing="8dp", size_hint_y=None, height="40dp")
-        actions.add_widget(Button(text="Оновити", on_release=_refresh_list))
-        actions.add_widget(Button(text="Закрити", on_release=lambda *_: popup.dismiss()))
-        root.add_widget(actions)
-
-        _refresh_list()
-        popup.open()
-        self._refresh_status()
-
-    def _on_bt_device_chosen(self, device: dict, popup: Popup):
-        config.BLUETOOTH_MAC = device.get("mac", "")
-        config.BLUETOOTH_NAME = device.get("name", "")
-        config.IS_EMULATOR = False
-        config.USE_TCP_EMULATOR = False
-        save_settings()
-
-        self.is_emulator = False
-        self._refresh_port_value()
-        self._sync_mode_button()
-        popup.dismiss()
-        self._device_popup = None
-
-        self.connection_status = f"Підключення до {config.BLUETOOTH_NAME or config.BLUETOOTH_MAC}..."
-        if "conn_status_lbl" in self.ids:
-            self.ids.conn_status_lbl.text = self.connection_status
-
-        self.reconnect()
-
     def reconnect(self):
         app = App.get_running_app()
-        if self._is_android() and not config.IS_EMULATOR and not getattr(config, "BLUETOOTH_MAC", ""):
-            self.select_device()
-            return
         app.switch_data_source(use_emulator=config.IS_EMULATOR)
-        self._refresh_port_value()
-        self._sync_mode_button()
         self._refresh_status()
 
 
