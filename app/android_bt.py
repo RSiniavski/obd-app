@@ -1,9 +1,96 @@
 import re
+import time
 
 
 def _get_jnius():
     from jnius import autoclass
     return autoclass
+
+
+def _is_android() -> bool:
+    try:
+        from kivy.utils import platform
+        return platform == "android"
+    except ImportError:
+        return False
+
+
+def request_bt_permissions(callback=None) -> None:
+    """Request runtime Bluetooth (and Location) permissions on Android."""
+    if not _is_android():
+        if callback:
+            callback(True, [])
+        return
+
+    try:
+        from android.permissions import Permission, request_permissions, check_permission
+        from android import api_version
+    except ImportError as e:
+        print(f"[Android BT] permissions API недоступний: {e}")
+        if callback:
+            callback(False, [])
+        return
+
+    needed = []
+    if api_version >= 31:
+        needed = [Permission.BLUETOOTH_CONNECT, Permission.BLUETOOTH_SCAN]
+    else:
+        needed = [
+            Permission.ACCESS_FINE_LOCATION,
+            Permission.ACCESS_COARSE_LOCATION,
+            Permission.BLUETOOTH,
+            Permission.BLUETOOTH_ADMIN,
+        ]
+
+    missing = [p for p in needed if not check_permission(p)]
+    if not missing:
+        if callback:
+            callback(True, [])
+        return
+
+    def _on_result(permissions, grants):
+        ok = all(grants) if grants else False
+        print(f"[Android BT] permissions result: {list(zip(permissions, grants))}")
+        if callback:
+            callback(ok, permissions)
+
+    request_permissions(missing, _on_result)
+
+
+def list_bonded_devices() -> list[dict]:
+    """Return paired Bluetooth devices: [{name, mac}, ...]."""
+    if not _is_android():
+        return []
+
+    try:
+        autoclass = _get_jnius()
+        BluetoothAdapter = autoclass("android.bluetooth.BluetoothAdapter")
+        adapter = BluetoothAdapter.getDefaultAdapter()
+        if not adapter or not adapter.isEnabled():
+            print("[Android BT] Bluetooth вимкнено або недоступний")
+            return []
+
+        bonded = adapter.getBondedDevices()
+        if bonded is None:
+            return []
+
+        devices = []
+        for device in bonded.toArray():
+            name = device.getName() or "Без назви"
+            mac = device.getAddress() or ""
+            if mac:
+                devices.append({"name": str(name), "mac": str(mac)})
+
+        devices.sort(key=lambda d: (0 if _looks_like_obd(d["name"]) else 1, d["name"].lower()))
+        return devices
+    except Exception as e:
+        print(f"[Android BT] Не вдалося отримати paired-пристрої: {e}")
+        return []
+
+
+def _looks_like_obd(name: str) -> bool:
+    upper = (name or "").upper()
+    return any(token in upper for token in ("OBD", "ELM", "VGATE", "VEEPEAK", "KONNWEI", "CARISTA"))
 
 
 class AndroidBluetoothOBD:
@@ -12,7 +99,7 @@ class AndroidBluetoothOBD:
     SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
 
     def __init__(self, mac_address: str):
-        self.mac_address = mac_address
+        self.mac_address = (mac_address or "").strip().upper()
         self.socket = None
         self.input_stream = None
         self.output_stream = None
@@ -25,8 +112,8 @@ class AndroidBluetoothOBD:
 
         try:
             autoclass = _get_jnius()
-            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            UUID = autoclass('java.util.UUID')
+            BluetoothAdapter = autoclass("android.bluetooth.BluetoothAdapter")
+            UUID = autoclass("java.util.UUID")
 
             adapter = BluetoothAdapter.getDefaultAdapter()
             if not adapter or not adapter.isEnabled():
@@ -37,8 +124,9 @@ class AndroidBluetoothOBD:
 
             device = adapter.getRemoteDevice(self.mac_address)
             spp_uuid = UUID.fromString(self.SPP_UUID)
-            self.socket = device.createRfcommSocketToServiceRecord(spp_uuid)
-            self.socket.connect()
+
+            if not self._open_socket(device, spp_uuid):
+                return False
 
             self.input_stream = self.socket.getInputStream()
             self.output_stream = self.socket.getOutputStream()
@@ -49,8 +137,52 @@ class AndroidBluetoothOBD:
             self.disconnect()
             return False
 
+    def _open_socket(self, device, spp_uuid) -> bool:
+        """Try secure SPP, then insecure, then reflection channel 1 (cheap ELM clones)."""
+        attempts = (
+            ("secure SPP", lambda: device.createRfcommSocketToServiceRecord(spp_uuid)),
+            ("insecure SPP", lambda: device.createInsecureRfcommSocketToServiceRecord(spp_uuid)),
+            ("RFCOMM ch1", lambda: self._create_rfcomm_fallback(device)),
+        )
+
+        last_error = None
+        for label, factory in attempts:
+            try:
+                self._close_socket_only()
+                self.socket = factory()
+                self.socket.connect()
+                print(f"[Android BT] Підключено через {label}")
+                return True
+            except Exception as e:
+                last_error = e
+                print(f"[Android BT] {label} не вдався: {e}")
+                self._close_socket_only()
+
+        print(f"[Android BT Error] Усі способи RFCOMM невдалі: {last_error}")
+        return False
+
+    def _create_rfcomm_fallback(self, device):
+        autoclass = _get_jnius()
+        Integer = autoclass("java.lang.Integer")
+        method = device.getClass().getMethod(
+            "createRfcommSocket",
+            [Integer.TYPE],
+        )
+        return method.invoke(device, [Integer(1)])
+
+    def _close_socket_only(self):
+        try:
+            if self.socket:
+                self.socket.close()
+        except Exception:
+            pass
+        self.socket = None
+
     def _init_elm327(self) -> bool:
-        for cmd in ["AT Z", "AT E0", "AT L0", "AT SP 0"]:
+        # AT Z resets the adapter; give it a moment before further commands.
+        for i, cmd in enumerate(["AT Z", "AT E0", "AT L0", "AT SP 0"]):
+            if i == 1:
+                time.sleep(1.0)
             if not self.send_command(cmd):
                 return False
         return True
@@ -62,7 +194,7 @@ class AndroidBluetoothOBD:
         if not self.output_stream or not self.input_stream:
             return ""
         try:
-            self.output_stream.write((cmd + "\r").encode('utf-8'))
+            self.output_stream.write((cmd + "\r").encode("utf-8"))
             self.output_stream.flush()
 
             buffer = bytearray()
@@ -71,10 +203,10 @@ class AndroidBluetoothOBD:
                 if byte == -1:
                     break
                 buffer.append(byte)
-                if byte == ord('>'):
+                if byte == ord(">"):
                     break
 
-            return buffer.decode('utf-8', errors='ignore').replace('>', '').strip()
+            return buffer.decode("utf-8", errors="ignore").replace(">", "").strip()
         except Exception as e:
             print(f"[Android BT Error] Помилка передачі: {e}")
             self._connected = False
@@ -86,7 +218,7 @@ class AndroidBluetoothOBD:
         if not response or "NO DATA" in response.upper() or "UNABLE" in response.upper():
             return None
 
-        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response.replace(" ", ""))
+        hex_bytes = re.findall(r"[0-9A-Fa-f]{2}", response.replace(" ", ""))
         if len(hex_bytes) < 2:
             return None
 
@@ -163,7 +295,7 @@ class AndroidBluetoothOBD:
         if not response or "NO DATA" in response.upper():
             return []
 
-        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response.replace(" ", ""))
+        hex_bytes = re.findall(r"[0-9A-Fa-f]{2}", response.replace(" ", ""))
         if len(hex_bytes) < 2 or hex_bytes[0] != "43":
             return []
 
@@ -194,13 +326,13 @@ class AndroidBluetoothOBD:
         if not response:
             return OBDResponse()
 
-        hex_bytes = re.findall(r'[0-9A-Fa-f]{2}', response.replace(" ", ""))
+        hex_bytes = re.findall(r"[0-9A-Fa-f]{2}", response.replace(" ", ""))
         if not hex_bytes:
             return OBDResponse()
 
         try:
             from obd.protocols import ECU
-            lines = [response.replace('\r', '').replace('\n', ' ').strip()]
+            lines = [response.replace("\r", "").replace("\n", " ").strip()]
             messages = ECU.UNKNOWN(lines)
             if messages:
                 return cmd(messages)

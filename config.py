@@ -13,8 +13,9 @@ EMULATOR_PORT = 35000
 # Налаштування COM-порту для реального ELM327 (наприклад: "COM3" або "/dev/ttyUSB0")
 REAL_OBD_PORT = os.getenv("OBD_PORT", "COM3")
 
-# MAC-адреса ELM327 Bluetooth-адаптера (Android)
+# MAC / ім'я ELM327 Bluetooth-адаптера (Android; обирається в UI)
 BLUETOOTH_MAC = os.getenv("BLUETOOTH_MAC", "")
+BLUETOOTH_NAME = os.getenv("BLUETOOTH_NAME", "")
 
 # Вигляд карток за замовчуванням ("Detailed" або "Compact")
 CARD_STYLE = "Detailed"

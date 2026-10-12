@@ -1,40 +1,40 @@
 {
     "cards": {
         "rpm": {
-            "columns": 3
+            "columns": 1
         },
         "speed": {
-            "columns": 3
+            "columns": 1
         },
         "coolant": {
-            "columns": 3
+            "columns": 1
         },
         "boost": {
-            "columns": 3
+            "columns": 1
         },
         "voltage": {
-            "columns": 3
+            "columns": 1
         },
         "iat": {
-            "columns": 3
+            "columns": 1
         },
         "rail_pressure": {
-            "columns": 3
+            "columns": 1
         },
         "maf": {
-            "columns": 3
+            "columns": 1
         },
         "engine_load": {
-            "columns": 3
+            "columns": 1
         },
         "throttle": {
-            "columns": 3
+            "columns": 1
         },
         "fuel_level": {
-            "columns": 3
+            "columns": 1
         },
         "ambient_temp": {
-            "columns": 3
+            "columns": 1
         }
     },
     "metric_styles": {
@@ -71,6 +71,7 @@
         "is_emulator": true,
         "use_tcp_emulator": false,
         "obd_port": "COM5",
-        "bluetooth_mac": ""
+        "bluetooth_mac": "",
+        "bluetooth_name": ""
     }
 }

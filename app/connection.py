@@ -37,8 +37,12 @@ class OBDConnectionManager:
 
         if _is_android():
             from app.android_bt import AndroidBluetoothOBD
-            mac = getattr(config, 'BLUETOOTH_MAC', '')
-            print(f"[App] Підключення до Android Bluetooth (MAC: {mac})...")
+            mac = getattr(config, "BLUETOOTH_MAC", "")
+            name = getattr(config, "BLUETOOTH_NAME", "") or mac or "?"
+            if not mac:
+                print("[App] Bluetooth MAC не вибрано — відкрийте «Обрати адаптер»")
+                return None
+            print(f"[App] Підключення до Android Bluetooth ({name}, MAC: {mac})...")
             conn = AndroidBluetoothOBD(mac)
             if conn.connect():
                 return conn
@@ -64,9 +68,13 @@ class OBDConnectionManager:
 
         if hasattr(conn, "is_connected") and conn.is_connected():
             if _is_android():
-                return f"Bluetooth: підключено ({config.BLUETOOTH_MAC or '?'})"
+                label = getattr(config, "BLUETOOTH_NAME", "") or config.BLUETOOTH_MAC or "?"
+                return f"Bluetooth: підключено ({label})"
             return f"OBD: підключено ({config.REAL_OBD_PORT})"
 
         if _is_android():
-            return f"Bluetooth: помилка ({config.BLUETOOTH_MAC or 'MAC не задано'})"
+            if not getattr(config, "BLUETOOTH_MAC", ""):
+                return "Bluetooth: оберіть адаптер у налаштуваннях"
+            label = getattr(config, "BLUETOOTH_NAME", "") or config.BLUETOOTH_MAC
+            return f"Bluetooth: помилка ({label})"
         return f"OBD: немає зв'язку ({config.REAL_OBD_PORT})"
